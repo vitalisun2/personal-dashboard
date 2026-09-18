@@ -340,8 +340,11 @@ sealed class LocalTaskAgent : ITaskAgent
             .ToArray();
 
         // 1) Если пользователь явно назвал уже существующий раздел — используем его.
-        var explicitSection = sections.FirstOrDefault(section =>
-            text.Contains(section, StringComparison.OrdinalIgnoreCase));
+        //    Берём САМЫЙ ДЛИННЫЙ подходящий, чтобы «Super Abilities UI» не схлопывался в «Super Abilities».
+        var explicitSection = sections
+            .Where(section => text.Contains(section, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(section => section.Length)
+            .FirstOrDefault();
         if (explicitSection is not null) return explicitSection;
 
         // 2) Небольшой локальный fallback. Выбираем только из существующих разделов.
@@ -375,6 +378,8 @@ static class TaskPrompt
         "короткий заголовок (2-6 слов, без точки в конце); подробное описание (1-3 предложения, " +
         "пересказ своими словами с сохранением всех деталей и фактов исходного текста); " +
         "раздел — выбери один из СПИСКА существующих разделов, если текст явно про него; " +
+        "выбирай САМЫЙ ТОЧНЫЙ ПОЛНЫЙ вариант из списка: например «Super Abilities UI» — это отдельный раздел, " +
+        "а не «Super Abilities»; " +
         "раздел «Общее» используй ТОЛЬКО если ни один из существующих разделов не подходит; " +
         "если подходящего раздела в списке нет — придумай новое короткое название (2-4 слова). " +
         "Верни строго JSON-объект вида {\"title\": \"...\", \"description\": \"...\", \"section\": \"...\"} " +
