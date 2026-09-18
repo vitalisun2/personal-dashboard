@@ -1,0 +1,20 @@
+services:
+  dashboard:
+    build: .
+    container_name: personal-dashboard
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    extra_hosts:
+      # чтобы контейнер видел Ollama, запущенную на хосте (или в соседнем контейнере с опубликованным портом)
+      - "host.docker.internal:host-gateway"
+    environment:
+      TASKS_FILE: /data/tasks.json
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct-2507-q4_K_M}
+      OPENROUTER_URL: ${OPENROUTER_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      # задачи переживают пересоздание контейнера
+      - ./data:/data

@@ -1,0 +1,10 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Данные пользователя — живут на volume/bind-mount, не в репозитории
+tasks.json
+data/
+.env

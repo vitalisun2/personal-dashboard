@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>My Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">MY DASH</div>
+      <button class="nav-item active" type="button"><span>✓</span> Задачи</button>
+      <button class="nav-item" type="button" disabled><span>◇</span> Память</button>
+    </aside>
+
+    <main class="content">
+      <section id="listView">
+        <header class="page-head">
+          <div>
+            <div class="eyebrow">ЗАДАЧИ</div>
+            <h1 id="pageTitle">Backlog</h1>
+          </div>
+          <div class="segmented" aria-label="Раздел задач">
+            <button id="backlogTab" class="segment active" type="button">Backlog</button>
+            <button id="todayTab" class="segment" type="button">Сегодня</button>
+          </div>
+        </header>
+
+        <form id="addForm" class="add-form">
+          <input id="taskInput" maxlength="1200" autocomplete="off" placeholder="Опиши новую задачу…" aria-label="Описание новой задачи">
+          <button class="primary" type="submit">Добавить</button>
+        </form>
+
+        <div id="filters" class="filters hidden" aria-label="Фильтр статусов">
+          <button class="filter active" data-filter="all" type="button">Все</button>
+          <button class="filter" data-filter="new" type="button"><span class="legend-dot new"></span>Новые</button>
+          <button class="filter" data-filter="in_progress" type="button"><span class="legend-dot work"></span>В работе</button>
+          <button class="filter" data-filter="completed" type="button"><span class="legend-dot done"></span>Завершены</button>
+        </div>
+
+        <div id="taskList" class="task-list"></div>
+        <div id="emptyState" class="empty hidden">Здесь пока нет задач.</div>
+      </section>
+
+      <section id="detailView" class="detail hidden">
+        <button id="backButton" class="back-button" type="button">← Назад</button>
+        <div class="detail-inner">
+          <div class="eyebrow">ЗАДАЧА</div>
+          <h1 id="detailTitle"></h1>
+          <div class="description-card">
+            <div class="description-label">Описание</div>
+            <p id="detailDescription"></p>
+          </div>
+          <div id="detailActions" class="detail-actions"></div>
+        </div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Главная навигация">
+      <button class="bottom-item active" type="button"><span>✓</span><small>Задачи</small></button>
+      <button class="bottom-item" type="button" disabled><span>◇</span><small>Память</small></button>
+      <button class="bottom-item" type="button" disabled><span>＋</span><small>Ещё</small></button>
+    </nav>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
