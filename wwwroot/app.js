@@ -74,15 +74,56 @@
   }
 
   function showTaskDetail(task) {
+    cancelDescriptionEdit();
     state.selectedTaskId=task.id; $('#listView').classList.add('hidden'); $('#detailView').classList.remove('hidden');
     $('#detailSection').textContent=normalizeSection(task.section); $('#detailTitle').textContent=task.title; $('#detailDescription').textContent=task.description;
     const actions=$('#detailActions'); actions.replaceChildren();
     const move=document.createElement('button'); move.type='button'; move.className='detail-move'; move.dataset.taskMove=task.id; move.textContent=task.bucket==='backlog'?'→ Сегодня':'← Backlog'; actions.append(move);
     if(task.bucket==='today'){const b=document.createElement('button');b.type='button';b.className='detail-status';b.dataset.taskAdvance=task.id;b.textContent=statusLabel[task.status];actions.append(b);}
+    const del=document.createElement('button');del.type='button';del.className='detail-delete';del.dataset.taskDelete=task.id;del.textContent='Удалить';actions.append(del);
   }
   function closeTaskDetail(){state.selectedTaskId=null;$('#detailView').classList.add('hidden');$('#listView').classList.remove('hidden');}
   async function moveTask(id){const t=state.tasks.find(x=>x.id===id);if(!t)return;const updated=await api(`/api/tasks/${id}/bucket`,{method:'PUT',body:JSON.stringify({bucket:t.bucket==='backlog'?'today':'backlog'})});Object.assign(t,updated,{section:normalizeSection(updated.section)});renderTasks();if(state.selectedTaskId===id)showTaskDetail(t);}
   async function advanceTask(id){const t=state.tasks.find(x=>x.id===id);if(!t)return;const r=await api(`/api/tasks/${id}/advance`,{method:'PUT',body:'{}'});if(r.deleted){state.tasks=state.tasks.filter(x=>x.id!==id);if(state.selectedTaskId===id)closeTaskDetail();}else Object.assign(t,r,{section:normalizeSection(r.section)});renderTasks();if(state.selectedTaskId===id&&state.tasks.includes(t))showTaskDetail(t);}
+  async function deleteTask(id){if(!confirm('Удалить задачу?'))return;const t=state.tasks.find(x=>x.id===id);if(!t)return;await api(`/api/tasks/${id}`,{method:'DELETE'});state.tasks=state.tasks.filter(x=>x.id!==id);if(state.selectedTaskId===id)closeTaskDetail();renderTasks();showToast('Задача удалена');}
+
+  // -------- Редактирование описания задачи --------
+  function beginDescriptionEdit() {
+    if (state.editingDescription || !state.selectedTaskId) return;
+    const p = $('#detailDescription');
+    const textarea = document.createElement('textarea');
+    textarea.id = 'detailDescriptionInput'; textarea.className = 'description-input';
+    textarea.value = p.textContent;
+    textarea.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); cancelDescriptionEdit(); } });
+    const save = document.createElement('button');
+    save.type = 'button'; save.id = 'detailDescriptionSave'; save.className = 'description-save';
+    save.textContent = 'OK';
+    save.addEventListener('click', () => saveDescriptionEdit().catch(err => showToast(err.message)));
+    state.editingDescription = true;
+    p.classList.add('hidden');
+    p.closest('.description-card').append(textarea, save);
+    textarea.focus();
+  }
+  function cancelDescriptionEdit() {
+    if (!state.editingDescription) return;
+    const ta = $('#detailDescriptionInput'); if (ta) ta.remove();
+    const ok = $('#detailDescriptionSave'); if (ok) ok.remove();
+    $('#detailDescription').classList.remove('hidden');
+    state.editingDescription = false;
+  }
+  async function saveDescriptionEdit() {
+    if (!state.editingDescription) return;
+    const ta = $('#detailDescriptionInput'); const id = state.selectedTaskId;
+    const t = state.tasks.find(x => x.id === id); if (!t) return;
+    const value = ta.value;
+    if (value === t.description) { cancelDescriptionEdit(); return; }
+    const updated = await api(`/api/tasks/${id}/description`, { method: 'PUT', body: JSON.stringify({ description: value }) });
+    Object.assign(t, updated, { section: normalizeSection(updated.section) });
+    cancelDescriptionEdit();
+    renderTasks();
+    if (state.selectedTaskId === id) { $('#detailDescription').textContent = updated.description; }
+    showToast('Описание сохранено');
+  }
 
   // -------- Memory --------
   async function loadMemory() {
@@ -132,8 +173,9 @@
   $$('.filter').forEach(b=>b.addEventListener('click',()=>{state.taskFilter=b.dataset.filter;renderTasks();}));
   $('#collapseAll').addEventListener('click',()=>{state.expanded[state.taskTab].clear();renderTasks();});
   $('#expandAll').addEventListener('click',()=>{state.tasks.filter(taskVisible).forEach(t=>state.expanded[state.taskTab].add(normalizeSection(t.section)));renderTasks();});
-  $('#backButton').addEventListener('click',closeTaskDetail);
-  $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const text=$('#taskInput').value.trim();if(!text)return;try{const item=await api('/api/tasks',{method:'POST',body:JSON.stringify({text})});state.tasks.unshift({...item,section:normalizeSection(item.section)});$('#taskInput').value='';renderTasks();}catch(err){showToast(err.message);}});
+  $('#backButton').addEventListener('click', closeTaskDetail);
+    $('#detailDescription').addEventListener('click', beginDescriptionEdit);
+  $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();if(!text)return;const orig=btn.textContent;const dots=['.','..','...'];let i=0;btn.disabled=true;btn.classList.add('sending');btn.textContent=dots[0];const timer=setInterval(()=>{i=(i+1)%dots.length;btn.textContent=dots[i];},375);try{const item=await api('/api/tasks',{method:'POST',body:JSON.stringify({text})});state.tasks.unshift({...item,section:normalizeSection(item.section)});$('#taskInput').value='';renderTasks();}catch(err){showToast(err.message);}finally{clearInterval(timer);btn.disabled=false;btn.classList.remove('sending');btn.textContent=orig;}});
 
   $$('.memory-tab').forEach(b=>b.addEventListener('click',()=>setMemoryTab(b.dataset.memoryTab)));
   $$('.secondary-tab').forEach(b=>b.addEventListener('click',()=>setSecondary(b.dataset.secondary)));
@@ -151,6 +193,7 @@
       const o=e.target.closest('[data-task-open]');if(o){const t=state.tasks.find(x=>x.id===o.dataset.taskOpen);if(t)showTaskDetail(t);return;}
       const m=e.target.closest('[data-task-move]');if(m){await moveTask(m.dataset.taskMove);return;}
       const a=e.target.closest('[data-task-advance]');if(a){await advanceTask(a.dataset.taskAdvance);return;}
+      const d=e.target.closest('[data-task-delete]');if(d){await deleteTask(d.dataset.taskDelete);return;}
       const l=e.target.closest('[data-lesson-open]');if(l){openLesson(l.dataset.lessonOpen);return;}
     }catch(err){showToast(err.message);}
   });

@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="PersonalDashboard.Tests" />
-  </ItemGroup>
+      <InternalsVisibleTo Include="PersonalDashboard.Tests" />
+      <Compile Remove="tests/**" />
+    </ItemGroup>
 </Project>

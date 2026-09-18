@@ -1,0 +1,18 @@
+{
+  "database": "healthy",
+  "hindsight": "healthy",
+  "worker": {
+    "state": "idle",
+    "last_error": ""
+  },
+  "queue": {
+    "queued": 1,
+    "processing": 0,
+    "completed": 42,
+    "failed": 0
+  },
+  "jobs": [
+    { "event_id": "j1", "status": "done" }
+  ],
+  "computers": ["DESKTOP"]
+}

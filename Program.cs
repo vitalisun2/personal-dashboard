@@ -11,7 +11,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
 });
 builder.Services.AddSingleton<TaskStore>();
-builder.Services.AddSingleton<IMemoryRepository, MockMemoryRepository>();
+builder.Services.AddSingleton<IMemoryRepository, MemoryRepository>();
 builder.Services.AddSingleton<ITaskAgent>(_ => new LlmTaskAgent(
     providers: [
         new OllamaClient(),
@@ -82,23 +82,38 @@ app.MapPut("/api/tasks/{id:guid}/advance", async (Guid id, TaskStore store) =>
     return Results.Ok(updated);
 });
 
-// ---------------- Agent memory (mock repository, API-shaped) ----------------
-app.MapGet("/api/memory/dashboard", (IMemoryRepository memory) => Results.Ok(memory.GetDashboard()));
-app.MapGet("/api/memory/status", (IMemoryRepository memory) => Results.Ok(memory.GetStatus()));
-app.MapGet("/api/memory/projects", (IMemoryRepository memory) => Results.Ok(memory.GetProjects()));
-app.MapGet("/api/memory/agents", (IMemoryRepository memory) => Results.Ok(memory.GetAgents()));
+// Удаление задачи (безвозвратно, из любого раздела)
+app.MapDelete("/api/tasks/{id:guid}", async (Guid id, TaskStore store) =>
+{
+    await store.DeleteAsync(id);
+    return Results.Ok(new { deleted = true });
+});
 
-app.MapGet("/api/memory/lessons", (string? q, string? project, string? agent, IMemoryRepository memory) =>
-    Results.Ok(memory.SearchLessons(q, project, agent)));
-app.MapGet("/api/memory/problems", (string? q, string? project, IMemoryRepository memory) =>
-    Results.Ok(memory.SearchProblems(q, project)));
-app.MapGet("/api/memory/skills", (string? q, IMemoryRepository memory) =>
-    Results.Ok(memory.SearchSkills(q)));
+// Обновление описания задачи
+app.MapPut("/api/tasks/{id:guid}/description", async (Guid id, UpdateDescriptionRequest request, TaskStore store) =>
+{
+    var updated = await store.UpdateAsync(id, task => task with { Description = request.Description?.Trim() ?? task.Description });
+    return updated is null ? Results.NotFound() : Results.Ok(updated);
+});
+
+// ---------------- Agent memory (mock repository, API-shaped) ----------------
+app.MapGet("/api/memory/dashboard", async (IMemoryRepository memory) => Results.Ok(await memory.GetDashboard()));
+app.MapGet("/api/memory/status", async (IMemoryRepository memory) => Results.Ok(await memory.GetStatus()));
+app.MapGet("/api/memory/projects", async (IMemoryRepository memory) => Results.Ok(await memory.GetProjects()));
+app.MapGet("/api/memory/agents", async (IMemoryRepository memory) => Results.Ok(await memory.GetAgents()));
+
+app.MapGet("/api/memory/lessons", async (string? q, string? project, string? agent, IMemoryRepository memory) =>
+    Results.Ok(await memory.SearchLessons(q, project, agent)));
+app.MapGet("/api/memory/problems", async (string? q, string? project, IMemoryRepository memory) =>
+    Results.Ok(await memory.SearchProblems(q, project)));
+app.MapGet("/api/memory/skills", async (string? q, IMemoryRepository memory) =>
+    Results.Ok(await memory.SearchSkills(q)));
 
 app.MapFallbackToFile("index.html");
 app.Run();
 
 record CreateTaskRequest(string? Text);
+record UpdateDescriptionRequest(string? Description);
 record MoveTaskRequest(TaskBucket Bucket);
 record TaskDraft(string Title, string Description, string Section);
 record TaskItem(Guid Id, string Title, string Description, string Section, TaskBucket Bucket, TaskStatus Status, DateTimeOffset CreatedAt);
@@ -413,28 +428,7 @@ static class TaskPrompt
 // Точка сборки для интеграционных тестов (WebApplicationFactory)
 public partial class Program { }
 
-// Mock repository. Later replace only this implementation with the real agent-memory client/repository.
-interface IMemoryRepository
-{
-    object GetDashboard();
-    object GetStatus();
-    IReadOnlyList<string> GetProjects();
-    IReadOnlyList<string> GetAgents();
-    IEnumerable<MemoryLesson> SearchLessons(string? q, string? project, string? agent);
-    IEnumerable<MemoryProblem> SearchProblems(string? q, string? project);
-    IEnumerable<MemorySkill> SearchSkills(string? q);
-}
-
-record MemoryLesson(int Id, string Title, string Method, string Problem, string Conditions, string Cause,
-    string WorkingMethod, string Evidence, string Verification, string Scope, string ProjectId, string Project,
-    string Status, string Agent, string Computer, DateTimeOffset OccurredAt, int AppliedCount, int VerifiedCount);
-record MemoryProblem(int Id, string Title, string Summary, string Scope, string ProjectId, string Project,
-    int SolutionCount, int AppliedCount, int VerifiedCount, DateTimeOffset LastChange);
-record MemorySkill(int Id, string Name, string Description, string Scope, string ProjectId, string Project,
-    string Status, string Source, string Computer, string Version, int VersionCount, string[] Dependencies,
-    string VerifiedExample, DateTimeOffset RegisteredAt, DateTimeOffset UpdatedAt);
-record SkillEvent(string Kind, string Name, string Method, string Verification, string Agent, string Computer, DateTimeOffset OccurredAt, string ProjectId);
-
+// Mock repository kept as a spare reference implementation; the real one is MemoryRepository.cs.
 sealed class MockMemoryRepository : IMemoryRepository
 {
     private readonly List<MemoryLesson> _lessons =
@@ -469,10 +463,10 @@ sealed class MockMemoryRepository : IMemoryRepository
         new("skill_candidate","midnight-reset-check","Замечена повторяемая проверка reset","Кандидат","Hermes","PC-2",DateTimeOffset.Now.AddDays(-1),"lost-cyber-hamster-2025")
     ];
 
-    public IReadOnlyList<string> GetProjects() => _lessons.Select(x => x.Project).Concat(_problems.Select(x => x.Project)).Distinct().Order().ToArray();
-    public IReadOnlyList<string> GetAgents() => _lessons.Select(x => x.Agent).Distinct().Order().ToArray();
+    public async Task<IReadOnlyList<string>> GetProjects() => _lessons.Select(x => x.Project).Concat(_problems.Select(x => x.Project)).Distinct().Order().ToArray();
+        public async Task<IReadOnlyList<string>> GetAgents() => _lessons.Select(x => x.Agent).Distinct().Order().ToArray();
 
-    public IEnumerable<MemoryLesson> SearchLessons(string? q, string? project, string? agent)
+        public async Task<IEnumerable<MemoryLesson>> SearchLessons(string? q, string? project, string? agent)
     {
         var query = _lessons.AsEnumerable();
         if (!string.IsNullOrWhiteSpace(project)) query = query.Where(x => x.Project.Equals(project, StringComparison.OrdinalIgnoreCase));
@@ -486,7 +480,7 @@ sealed class MockMemoryRepository : IMemoryRepository
         return query.OrderByDescending(x => x.OccurredAt);
     }
 
-    public IEnumerable<MemoryProblem> SearchProblems(string? q, string? project)
+    public async Task<IEnumerable<MemoryProblem>> SearchProblems(string? q, string? project)
     {
         var query = _problems.AsEnumerable();
         if (!string.IsNullOrWhiteSpace(project)) query = query.Where(x => x.Project.Equals(project, StringComparison.OrdinalIgnoreCase));
@@ -494,14 +488,14 @@ sealed class MockMemoryRepository : IMemoryRepository
         return query.OrderByDescending(x => x.LastChange);
     }
 
-    public IEnumerable<MemorySkill> SearchSkills(string? q)
+    public async Task<IEnumerable<MemorySkill>> SearchSkills(string? q)
     {
         var query = _skills.AsEnumerable();
         if (!string.IsNullOrWhiteSpace(q)) query = query.Where(x => (x.Name + " " + x.Description + " " + x.Project).Contains(q, StringComparison.OrdinalIgnoreCase));
         return query.OrderBy(x => x.Status == "active" ? 0 : 1).ThenBy(x => x.Name);
     }
 
-    public object GetDashboard()
+    public async Task<object> GetDashboard()
     {
         var recentPrepares = new[]
         {
@@ -533,7 +527,7 @@ sealed class MockMemoryRepository : IMemoryRepository
         };
     }
 
-    public object GetStatus() => new
+    public async Task<object> GetStatus() => new
     {
         database = new { status = "healthy", requiresAttention = false },
         hindsight = new { status = "healthy", requiresAttention = false },

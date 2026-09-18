@@ -15,6 +15,9 @@ services:
       OPENROUTER_URL: ${OPENROUTER_URL:-https://openrouter.ai/api/v1}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Общая память агентов: URL гейтвея (localhost внутри контейнера — свой; поэтому host.docker.internal)
+      MEMORY_GATEWAY_URL: "${MEMORY_GATEWAY_URL:-http://host.docker.internal:8766}"
+      MEMORY_API_KEY: "${MEMORY_API_KEY:-}"
     volumes:
       # задачи переживают пересоздание контейнера
       - ./data:/data
