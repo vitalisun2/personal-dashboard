@@ -3,7 +3,11 @@
     tasks: [],
     tab: 'backlog',
     filter: 'all',
-    selectedId: null
+    selectedId: null,
+    collapsed: {
+      backlog: new Set(),
+      today: new Set()
+    }
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -22,6 +26,10 @@
     in_progress: 'Завершить',
     completed: 'Стикер'
   };
+
+  function normalizeSection(section) {
+    return String(section || '').trim() || 'Общее';
+  }
 
   function statusDotClass(status) {
     if (status === 'in_progress') return 'work';
@@ -52,7 +60,7 @@
 
   async function loadTasks() {
     try {
-      state.tasks = await api('/api/tasks');
+      state.tasks = (await api('/api/tasks')).map(task => ({ ...task, section: normalizeSection(task.section) }));
       render();
     } catch (error) {
       showToast(error.message);
@@ -76,6 +84,7 @@
     state.selectedId = task.id;
     listView.classList.add('hidden');
     detailView.classList.remove('hidden');
+    $('#detailSection').textContent = normalizeSection(task.section);
     $('#detailTitle').textContent = task.title;
     $('#detailDescription').textContent = task.description;
 
@@ -147,6 +156,37 @@
     return row;
   }
 
+  function visibleTasks() {
+    const isToday = state.tab === 'today';
+    return state.tasks.filter(task => {
+      if (task.bucket !== state.tab) return false;
+      return !isToday || state.filter === 'all' || task.status === state.filter;
+    });
+  }
+
+  function createGroup(section, tasks) {
+    const group = document.createElement('section');
+    group.className = 'task-group';
+
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'group-header';
+    header.dataset.action = 'toggle-group';
+    header.dataset.section = section;
+    header.textContent = section;
+    header.setAttribute('aria-expanded', String(!state.collapsed[state.tab].has(section)));
+    group.append(header);
+
+    if (!state.collapsed[state.tab].has(section)) {
+      const items = document.createElement('div');
+      items.className = 'group-tasks';
+      items.append(...tasks.map(createTaskRow));
+      group.append(items);
+    }
+
+    return group;
+  }
+
   function render() {
     const isToday = state.tab === 'today';
     pageTitle.textContent = isToday ? 'Сегодня' : 'Backlog';
@@ -159,13 +199,31 @@
       button.classList.toggle('active', button.dataset.filter === state.filter);
     });
 
-    const visible = state.tasks.filter(task => {
-      if (task.bucket !== state.tab) return false;
-      return !isToday || state.filter === 'all' || task.status === state.filter;
+    const visible = visibleTasks();
+    const grouped = new Map();
+    visible.forEach(task => {
+      const section = normalizeSection(task.section);
+      if (!grouped.has(section)) grouped.set(section, []);
+      grouped.get(section).push(task);
     });
 
-    taskList.replaceChildren(...visible.map(createTaskRow));
+    const groups = [...grouped.entries()].map(([section, tasks]) => createGroup(section, tasks));
+    taskList.replaceChildren(...groups);
     emptyState.classList.toggle('hidden', visible.length !== 0);
+  }
+
+  function toggleGroup(section) {
+    const set = state.collapsed[state.tab];
+    if (set.has(section)) set.delete(section);
+    else set.add(section);
+    render();
+  }
+
+  function setAllGroupsCollapsed(collapse) {
+    const sections = [...new Set(visibleTasks().map(task => normalizeSection(task.section)))];
+    const set = state.collapsed[state.tab];
+    sections.forEach(section => collapse ? set.add(section) : set.delete(section));
+    render();
   }
 
   async function moveTask(id) {
@@ -177,7 +235,7 @@
         method: 'PUT',
         body: JSON.stringify({ bucket })
       });
-      Object.assign(task, updated);
+      Object.assign(task, updated, { section: normalizeSection(updated.section) });
       render();
       if (state.selectedId === id) showDetail(task);
     } catch (error) {
@@ -197,7 +255,7 @@
           showList();
         }
       } else {
-        Object.assign(task, result);
+        Object.assign(task, result, { section: normalizeSection(result.section) });
         if (state.selectedId === id) showDetail(task);
       }
       render();
@@ -218,8 +276,9 @@
         method: 'POST',
         body: JSON.stringify({ text })
       });
-      state.tasks.unshift(created);
+      state.tasks.unshift({ ...created, section: normalizeSection(created.section) });
       taskInput.value = '';
+      state.collapsed.backlog.delete(normalizeSection(created.section));
       render();
     } catch (error) {
       showToast(error.message);
@@ -228,6 +287,8 @@
 
   $('#backlogTab').addEventListener('click', () => setTab('backlog'));
   $('#todayTab').addEventListener('click', () => setTab('today'));
+  $('#collapseAll').addEventListener('click', () => setAllGroupsCollapsed(true));
+  $('#expandAll').addEventListener('click', () => setAllGroupsCollapsed(false));
   $('#backButton').addEventListener('click', () => {
     state.selectedId = null;
     showList();
@@ -243,6 +304,12 @@
   document.addEventListener('click', event => {
     const control = event.target.closest('[data-action]');
     if (!control) return;
+
+    if (control.dataset.action === 'toggle-group') {
+      toggleGroup(control.dataset.section);
+      return;
+    }
+
     const id = control.dataset.id;
     if (control.dataset.action === 'open') {
       const task = state.tasks.find(item => item.id === id);

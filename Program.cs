@@ -30,11 +30,19 @@ app.MapPost("/api/tasks", async (CreateTaskRequest request, TaskStore store, ITa
     if (string.IsNullOrWhiteSpace(text))
         return Results.BadRequest(new { message = "Описание задачи не может быть пустым." });
 
-    var draft = await agent.CreateDraftAsync(text);
+    var existing = await store.GetAllAsync();
+    var sections = existing
+        .Select(x => string.IsNullOrWhiteSpace(x.Section) ? "Общее" : x.Section)
+        .Append("Общее")
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    var draft = await agent.CreateDraftAsync(text, sections);
     var item = new TaskItem(
         Guid.NewGuid(),
         draft.Title,
         draft.Description,
+        draft.Section,
         TaskBucket.Backlog,
         TaskStatus.New,
         DateTimeOffset.UtcNow);
@@ -78,15 +86,15 @@ app.Run();
 
 record CreateTaskRequest(string? Text);
 record MoveTaskRequest(TaskBucket Bucket);
-record TaskDraft(string Title, string Description);
-record TaskItem(Guid Id, string Title, string Description, TaskBucket Bucket, TaskStatus Status, DateTimeOffset CreatedAt);
+record TaskDraft(string Title, string Description, string Section);
+record TaskItem(Guid Id, string Title, string Description, string Section, TaskBucket Bucket, TaskStatus Status, DateTimeOffset CreatedAt);
 
 enum TaskBucket { Backlog, Today }
 enum TaskStatus { New, InProgress, Completed }
 
 interface ITaskAgent
 {
-    Task<TaskDraft> CreateDraftAsync(string rawText);
+    Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections);
 }
 
 // ── LLM-агент с каскадом провайдеров ────────────────────────────────────────
@@ -108,15 +116,23 @@ sealed class LlmTaskAgent : ITaskAgent
         _logger = factory.CreateLogger("TaskAgent");
     }
 
-    public async Task<TaskDraft> CreateDraftAsync(string rawText)
+    public async Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections)
     {
         foreach (var provider in _providers)
         {
             try
             {
-                var draft = await provider.TryParseAsync(rawText);
+                var draft = await provider.TryParseAsync(rawText, existingSections);
                 if (draft is not null)
                 {
+                    // Страховка: маленькие модели льнут к «Общее»; если эвристика
+                    // уверенно нашла конкретный раздел — берём её выбор.
+                    if (draft.Section.Equals("Общее", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var heuristicSection = LocalTaskAgent.FallbackSection(rawText, existingSections);
+                        if (!heuristicSection.Equals("Общее", StringComparison.OrdinalIgnoreCase))
+                            draft = draft with { Section = heuristicSection };
+                    }
                     _logger.LogInformation("Задача разобрана провайдером {Provider}", provider.Name);
                     return draft;
                 }
@@ -127,23 +143,18 @@ sealed class LlmTaskAgent : ITaskAgent
             }
         }
         _logger.LogInformation("Все LLM-провайдеры недоступны, используется эвристика");
-        return await _fallback.CreateDraftAsync(rawText);
+        return await _fallback.CreateDraftAsync(rawText, existingSections);
     }
 }
 
 interface ILlmProvider
 {
     string Name { get; }
-    Task<TaskDraft?> TryParseAsync(string rawText);
+    Task<TaskDraft?> TryParseAsync(string rawText, IReadOnlyCollection<string> existingSections);
 }
 
 abstract class HttpLlmProvider : ILlmProvider
 {
-    protected static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
-    {
-        PropertyNameCaseInsensitive = true,
-    };
-
     private readonly HttpClient _http;
 
     protected HttpLlmProvider(HttpClient http) => _http = http;
@@ -151,13 +162,14 @@ abstract class HttpLlmProvider : ILlmProvider
     public abstract string Name { get; }
     protected abstract string ChatUrl { get; }
     protected virtual void AddAuth(HttpRequestMessage request) { }
+    protected abstract object BuildPayload(string rawText, IReadOnlyCollection<string> existingSections);
 
     protected static string? ReadEnv(string name, string? fallback) =>
         Environment.GetEnvironmentVariable(name) is { Length: > 0 } value ? value : fallback;
 
-    public virtual async Task<TaskDraft?> TryParseAsync(string rawText)
+    public virtual async Task<TaskDraft?> TryParseAsync(string rawText, IReadOnlyCollection<string> existingSections)
     {
-        var body = BuildPayload(rawText);
+        var body = BuildPayload(rawText, existingSections);
         using var request = new HttpRequestMessage(HttpMethod.Post, ChatUrl)
         {
             Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
@@ -171,9 +183,7 @@ abstract class HttpLlmProvider : ILlmProvider
         return ExtractDraft(json, rawText);
     }
 
-    protected abstract object BuildPayload(string rawText);
-
-    // Достаёт {title, description} из тела ответа; при ошибке парсинга — null,
+    // Достаёт {title, description, section} из тела ответа; при ошибке парсинга — null,
     // чтобы каскад ушёл на следующий провайдер / эвристику.
     private static TaskDraft? ExtractDraft(string body, string rawText)
     {
@@ -192,19 +202,32 @@ abstract class HttpLlmProvider : ILlmProvider
 
             var title = root.TryGetProperty("title", out var t) ? t.GetString()?.Trim() : null;
             var description = root.TryGetProperty("description", out var d) ? d.GetString()?.Trim() : null;
+            var section = Sanitize(root.TryGetProperty("section", out var s) ? s.GetString() : null);
 
             if (string.IsNullOrWhiteSpace(title)) return null;
 
             const int maxTitle = 120;
             if (title.Length > maxTitle) title = title[..(maxTitle - 1)].TrimEnd() + "…";
             if (string.IsNullOrWhiteSpace(description)) description = rawText;
+            if (string.IsNullOrWhiteSpace(section)) section = "Общее";
 
-            return new TaskDraft(title, description);
+            return new TaskDraft(title, description, section);
         }
         catch
         {
             return null;
         }
+    }
+
+    // Модель иногда приклеивает к значению хвост грамматики ('}", ]} и т.п.) —
+    // режем по первому невалидному символу.
+    private static string? Sanitize(string? value)
+    {
+        if (value is null) return null;
+        var cut = value.IndexOfAny(['"', '\'', '}', ']', '\\', '`']);
+        if (cut >= 0) value = value[..cut];
+        value = value.Trim();
+        return string.IsNullOrEmpty(value) ? null : value;
     }
 }
 
@@ -215,7 +238,6 @@ sealed class OllamaClient : HttpLlmProvider
     private const string DefaultModel = "qwen3:4b-instruct-2507-q4_K_M";
 
     private readonly string _model;
-
     private readonly string _baseUrl;
 
     public OllamaClient()
@@ -228,14 +250,14 @@ sealed class OllamaClient : HttpLlmProvider
     public override string Name => $"Ollama ({_model})";
     protected override string ChatUrl => $"{_baseUrl}/v1/chat/completions";
 
-    protected override object BuildPayload(string rawText) => new
+    protected override object BuildPayload(string rawText, IReadOnlyCollection<string> existingSections) => new
     {
         model = _model,
         temperature = 0,
         options = new { num_ctx = 16384 },
         messages = new[]
         {
-            new { role = "system", content = SystemPrompt },
+            new { role = "system", content = BuildSystemPrompt(existingSections) },
             new { role = "user", content = rawText }
         },
         response_format = new
@@ -259,7 +281,6 @@ sealed class OpenRouterClient : HttpLlmProvider
 
     private readonly string _model;
     private readonly string? _apiKey;
-
     private readonly string _baseUrl;
 
     public OpenRouterClient()
@@ -279,51 +300,95 @@ sealed class OpenRouterClient : HttpLlmProvider
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
     }
 
-    public override async Task<TaskDraft?> TryParseAsync(string rawText)
+    public override async Task<TaskDraft?> TryParseAsync(string rawText, IReadOnlyCollection<string> existingSections)
     {
         if (string.IsNullOrEmpty(_apiKey)) return null; // нет ключа — провайдер выключен
-        return await base.TryParseAsync(rawText);
+        return await base.TryParseAsync(rawText, existingSections);
     }
 
-    protected override object BuildPayload(string rawText) => new
+    protected override object BuildPayload(string rawText, IReadOnlyCollection<string> existingSections) => new
     {
         model = _model,
         temperature = 0,
         messages = new[]
         {
-            new { role = "system", content = SystemPrompt },
+            new { role = "system", content = BuildSystemPrompt(existingSections) },
             new { role = "user", content = rawText }
         },
         response_format = new { type = "json_object" }
     };
 }
 
-// 3. Эвристика без сети: короткий title из первого предложения, полный текст — description
+// 3. Эвристика без сети: title из первого предложения, раздел — по ключевым словам
 sealed class LocalTaskAgent : ITaskAgent
 {
-    public Task<TaskDraft> CreateDraftAsync(string rawText)
+    public Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections)
     {
         var normalized = string.Join(' ', rawText.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         var firstSentenceEnd = normalized.IndexOfAny(['.', '!', '?']);
         var candidate = firstSentenceEnd > 0 ? normalized[..firstSentenceEnd] : normalized;
         var title = candidate.Length <= 72 ? candidate : candidate[..69].TrimEnd() + "…";
-        return Task.FromResult(new TaskDraft(title, normalized));
+        var section = PickSection(normalized, existingSections);
+        return Task.FromResult(new TaskDraft(title, normalized, section));
     }
+
+    private static string PickSection(string text, IReadOnlyCollection<string> existingSections)
+    {
+        var sections = existingSections
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        // 1) Если пользователь явно назвал уже существующий раздел — используем его.
+        var explicitSection = sections.FirstOrDefault(section =>
+            text.Contains(section, StringComparison.OrdinalIgnoreCase));
+        if (explicitSection is not null) return explicitSection;
+
+        // 2) Небольшой локальный fallback. Выбираем только из существующих разделов.
+        var lower = text.ToLowerInvariant();
+        var hints = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Личный дашборд"] = ["дашборд", "dashboard", "интерфейс задач", "личное приложение"],
+            ["Lost Cyber Hamster"] = ["hamster", "хомяк", "lost cyber", "lch", "париж", "барселон", "квест", "energy bar", "прыж"],
+            ["Workflow"] = ["workflow", "агент", "инструкц", "prompt", "промпт", "оркестратор", "hindsight", "graphify"]
+        };
+
+        foreach (var (suggested, keywords) in hints)
+        {
+            if (!keywords.Any(lower.Contains)) continue;
+            var existing = sections.FirstOrDefault(x => x.Equals(suggested, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null) return existing;
+        }
+
+        // 3) Если уверенного совпадения нет — дефолтный раздел.
+        return sections.FirstOrDefault(x => x.Equals("Общее", StringComparison.OrdinalIgnoreCase)) ?? "Общее";
+    }
+
+    public static string FallbackSection(string text, IReadOnlyCollection<string> existingSections) =>
+        PickSection(text, existingSections);
 }
 
 static class TaskPrompt
 {
-    public const string SystemPrompt =
+    public const string Instructions =
         "Ты — помощник личного дашборда задач. Из надиктованного пользователем текста задачи выдели: " +
-        "короткий заголовок (2-6 слов, без точки в конце) и подробное описание (1-3 предложения, " +
-        "пересказ своими словами с сохранением всех деталей и фактов исходного текста). " +
-        "Верни строго JSON-объект вида {\"title\": \"...\", \"description\": \"...\"} без markdown и лишнего текста.";
+        "короткий заголовок (2-6 слов, без точки в конце); подробное описание (1-3 предложения, " +
+        "пересказ своими словами с сохранением всех деталей и фактов исходного текста); " +
+        "раздел — выбери один из СПИСКА существующих разделов, если текст явно про него; " +
+        "раздел «Общее» используй ТОЛЬКО если ни один из существующих разделов не подходит; " +
+        "если подходящего раздела в списке нет — придумай новое короткое название (2-4 слова). " +
+        "Верни строго JSON-объект вида {\"title\": \"...\", \"description\": \"...\", \"section\": \"...\"} " +
+        "без markdown и лишнего текста.";
+
+    public static string BuildSystemPrompt(IReadOnlyCollection<string> existingSections) =>
+        Instructions + "\n\nСуществующие разделы: " + string.Join("; ", existingSections);
 
     public static readonly JsonElement Schema = JsonDocument.Parse(
         "{\"type\":\"object\",\"properties\":{" +
         "\"title\":{\"type\":\"string\",\"description\":\"Короткий заголовок задачи, 2-6 слов, без точки в конце\"}," +
-        "\"description\":{\"type\":\"string\",\"description\":\"Подробное описание задачи, 1-3 предложения\"}}," +
-        "\"required\":[\"title\",\"description\"],\"additionalProperties\":false}").RootElement.Clone();
+        "\"description\":{\"type\":\"string\",\"description\":\"Подробное описание задачи, 1-3 предложения\"}," +
+        "\"section\":{\"type\":\"string\",\"description\":\"Название раздела — из списка существующих или новое, 2-4 слова\"}}," +
+        "\"required\":[\"title\",\"description\",\"section\"],\"additionalProperties\":false}").RootElement.Clone();
 }
 
 // Точка сборки для интеграционных тестов (WebApplicationFactory)
@@ -403,7 +468,10 @@ sealed class TaskStore
     {
         if (!File.Exists(_path)) return [];
         await using var stream = File.OpenRead(_path);
-        return await JsonSerializer.DeserializeAsync<List<TaskItem>>(stream, _json) ?? [];
+        var items = await JsonSerializer.DeserializeAsync<List<TaskItem>>(stream, _json) ?? [];
+        return items
+            .Select(item => item with { Section = string.IsNullOrWhiteSpace(item.Section) ? "Общее" : item.Section })
+            .ToList();
     }
 
     private async Task WriteUnsafeAsync(List<TaskItem> items)

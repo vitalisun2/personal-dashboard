@@ -22,9 +22,21 @@
             <div class="eyebrow">ЗАДАЧИ</div>
             <h1 id="pageTitle">Backlog</h1>
           </div>
-          <div class="segmented" aria-label="Раздел задач">
-            <button id="backlogTab" class="segment active" type="button">Backlog</button>
-            <button id="todayTab" class="segment" type="button">Сегодня</button>
+
+          <div class="head-controls">
+            <div class="segmented" aria-label="Раздел задач">
+              <button id="backlogTab" class="segment active" type="button">Backlog</button>
+              <button id="todayTab" class="segment" type="button">Сегодня</button>
+            </div>
+
+            <div class="group-controls" aria-label="Управление разделами">
+              <button id="collapseAll" class="icon-button" type="button" title="Свернуть все" aria-label="Свернуть все разделы">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9l5 4 5-4M7 15l5-4 5 4"/></svg>
+              </button>
+              <button id="expandAll" class="icon-button" type="button" title="Развернуть все" aria-label="Развернуть все разделы">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5-4 5 4M7 14l5 4 5-4"/></svg>
+              </button>
+            </div>
           </div>
         </header>
 
@@ -47,7 +59,7 @@
       <section id="detailView" class="detail hidden">
         <button id="backButton" class="back-button" type="button">← Назад</button>
         <div class="detail-inner">
-          <div class="eyebrow">ЗАДАЧА</div>
+          <div id="detailSection" class="detail-section"></div>
           <h1 id="detailTitle"></h1>
           <div class="description-card">
             <div class="description-label">Описание</div>
