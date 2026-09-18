@@ -19,7 +19,8 @@ interface IMemoryRepository
 
 record MemoryLesson(int Id, string Title, string Method, string Problem, string Conditions, string Cause,
     string WorkingMethod, string Evidence, string Verification, string Scope, string ProjectId, string Project,
-    string Status, string Agent, string Computer, DateTimeOffset OccurredAt, int AppliedCount, int VerifiedCount);
+    string Status, string Agent, string Computer, DateTimeOffset OccurredAt, int AppliedCount, int VerifiedCount,
+    DateTimeOffset? LastReadAt = null, int ReadCount = 0, DateTimeOffset? LastAppliedAt = null);
 
 record MemoryProblem(int Id, string Title, string Summary, string Scope, string ProjectId, string Project,
     int SolutionCount, int AppliedCount, int VerifiedCount, DateTimeOffset LastChange);
@@ -227,6 +228,38 @@ sealed class MemoryRepository : IMemoryRepository
                     warning = NullableStr(Prop(p, "warning"))
                 });
             }
+        // Recent-activity feeds mirror recent_prepares; absent on the old gateway
+        // (null metrics node or missing keys) -> empty arrays via ArrayNodes.
+        var recentReads = new List<object>();
+        foreach (var r in ArrayNodes(metrics, "recent_reads"))
+        {
+            recentReads.Add(new
+            {
+                id = Str(Prop(r, "id")),
+                title = Str(Prop(r, "title")),
+                readAt = Str(Prop(r, "read_at"))
+            });
+        }
+        var recentApplied = new List<object>();
+        foreach (var r in ArrayNodes(metrics, "recent_applied"))
+        {
+            recentApplied.Add(new
+            {
+                id = Str(Prop(r, "id")),
+                title = Str(Prop(r, "title")),
+                appliedAt = Str(Prop(r, "applied_at"))
+            });
+        }
+        var recentAdded = new List<object>();
+        foreach (var r in ArrayNodes(metrics, "recent_added"))
+        {
+            recentAdded.Add(new
+            {
+                id = Str(Prop(r, "id")),
+                title = Str(Prop(r, "title")),
+                addedAt = Str(Prop(r, "added_at"))
+            });
+        }
         // Lessons are mapped after applied/verified events attach to them, so the
         // cards carry both the gateway's own counts and re-attached dead-link events.
         var lessonNodes = ArrayNodes(root, "lessons");
@@ -258,6 +291,9 @@ sealed class MemoryRepository : IMemoryRepository
             byAgent = MapCounters(Prop(metrics, "by_agent")),
             byProject = MapCounters(Prop(metrics, "by_project")),
             recentPrepares = prepares.ToArray(),
+            recentReads = recentReads.ToArray(),
+            recentApplied = recentApplied.ToArray(),
+            recentAdded = recentAdded.ToArray(),
             note = Str(Prop(metrics, "note"))
         };
         return new Payload(lessons, problems, skills, events, metricObject, Str(Prop(root, "window")));
@@ -299,7 +335,11 @@ sealed class MemoryRepository : IMemoryRepository
         // whose links point at removed lessons are re-attached by MatchLessonEvents,
         // which can raise the counters but never lower the gateway's own numbers.
         Max(Int(Prop(e, "applied_count")), matchedApplied),
-        Max(Int(Prop(e, "verified_count")), matchedVerified));
+        Max(Int(Prop(e, "verified_count")), matchedVerified),
+        // Optional gateway fields: absent on the old gateway -> null/0, never a crash.
+        Iso(Prop(e, "last_read_at")),
+        Int(Prop(e, "read_count")),
+        Iso(Prop(e, "last_applied_at")));
 
     private static MemoryProblem MapProblem(JsonElement e) => new(
         HashId(Str(Prop(e, "id"))),
@@ -630,6 +670,9 @@ sealed class MemoryRepository : IMemoryRepository
             byAgent = new Dictionary<string, object>(StringComparer.Ordinal),
             byProject = new Dictionary<string, object>(StringComparer.Ordinal),
             recentPrepares = new object[] {},
+            recentReads = new object[] {},
+            recentApplied = new object[] {},
+            recentAdded = new object[] {},
             note = "Гейтвей памяти недоступен — данные не получены."
         },
         window = "Офлайн"

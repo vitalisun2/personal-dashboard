@@ -80,9 +80,21 @@
               <div class="panel-title">Самый полезный опыт</div>
               <div class="panel-subtitle">Рейтинг по числу применений; ✓ — подтверждённые результаты</div>
               <div id="topLessons" class="rank-list"></div>
-            </div>
+                          </div>
 
-            <div class="panel secondary-panel">
+                          <div class="panel recent-panel">
+                            <div class="secondary-head">
+                              <div class="panel-title">Последние события</div>
+                              <div class="segmented small">
+                                <button class="recent-tab active" data-recent-tab="reads" type="button">Прочитаны</button>
+                                <button class="recent-tab" data-recent-tab="applied" type="button">Применены</button>
+                                <button class="recent-tab" data-recent-tab="added" type="button">Добавлены</button>
+                              </div>
+                            </div>
+                            <div id="recentContent"></div>
+                          </div>
+
+                          <div class="panel secondary-panel">
               <div class="secondary-head">
                 <div class="panel-title">Дополнительный срез</div>
                 <div class="segmented small">
@@ -102,7 +114,12 @@
               <select id="lessonAgent" aria-label="Агент"></select>
             </div>
             <div class="search-note">Поиск идёт через backend. В мок-репозитории используется локальный fallback; позже его можно заменить на Hindsight/vector search.</div>
-            <div id="lessonList" class="dense-list"></div>
+                        <div id="lessonSortBar" class="lesson-sort-bar">
+                          <button class="lesson-sort active" data-lesson-sort="added" type="button">По добавлению</button>
+                          <button class="lesson-sort" data-lesson-sort="applied" type="button">По применению</button>
+                          <button class="lesson-sort" data-lesson-sort="read" type="button">По чтению</button>
+                        </div>
+                        <div id="lessonList" class="dense-list"></div>
             <div id="lessonEmpty" class="empty hidden">Уроков по этому запросу не найдено.</div>
           </section>
 
@@ -136,6 +153,7 @@
             <div class="lesson-detail-badges"><span id="lessonDetailProject" class="detail-section"></span><span id="lessonDetailScope" class="muted"></span></div>
             <h1 id="lessonDetailTitle"></h1>
             <div id="lessonDetailMeta" class="muted small-text"></div>
+            <div id="lessonDetailDates" class="muted small-text"></div>
             <div class="lesson-detail-grid">
               <div class="description-card"><div class="description-label">Проблема</div><p id="lessonProblem"></p></div>
               <div class="description-card"><div class="description-label">Условия</div><p id="lessonConditions"></p></div>

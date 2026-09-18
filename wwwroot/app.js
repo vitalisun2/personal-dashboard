@@ -2,7 +2,8 @@
   const state = {
     main: 'tasks', tasks: [], taskTab: 'backlog', taskFilter: 'all', selectedTaskId: null,
     expanded: { backlog: new Set(), today: new Set() },
-    dashboard: null, memoryStatus: null, memoryTab: 'overview', secondary: 'agents', selectedLesson: null
+    dashboard: null, memoryStatus: null, memoryTab: 'overview', secondary: 'agents', selectedLesson: null,
+    lessonSort: 'added', recentTab: 'reads'
   };
 
   const $ = s => document.querySelector(s);
@@ -185,8 +186,7 @@
     $('#kpiRow').innerHTML=kpis.map(([l,v])=>`<div class="kpi"><div class="kpi-label">${l}</div><div class="kpi-value">${v}</div></div>`).join('');
     const top=[...state.dashboard.lessons].sort((a,b)=>b.appliedCount-a.appliedCount).slice(0,5); const max=Math.max(1,...top.map(x=>x.appliedCount));
     const box=$('#topLessons'); box.replaceChildren(); top.forEach(l=>{const b=document.createElement('button');b.type='button';b.className='rank-row';b.dataset.lessonOpen=l.id;b.innerHTML=`<div class="rank-head"><span class="rank-title">${escapeHtml(l.title)}</span><span class="rank-stats">${l.appliedCount} · ${l.verifiedCount} подтверждено</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(l.appliedCount/max*100)}%"></div></div>`;box.append(b);});
-    renderSecondary();
-  }
+    renderRecent(); renderSecondary();  }
 
   function setSecondary(tab){state.secondary=tab;$$('.secondary-tab').forEach(b=>b.classList.toggle('active',b.dataset.secondary===tab));renderSecondary();}
   function renderSecondary(){
@@ -195,19 +195,33 @@
     const src=state.secondary==='agents'?m.byAgent:m.byProject; const rows=Object.entries(src).map(([name,v])=>({name:state.secondary==='projects'?projectName(name):name,...v})).sort((a,b)=>b.applied-a.applied);const max=Math.max(1,...rows.map(x=>x.applied));const chart=document.createElement('div');chart.className='mini-chart';rows.forEach(r=>{const d=document.createElement('div');d.className='mini-row';d.innerHTML=`<div class="row-head"><span>${escapeHtml(r.name)}</span><span class="muted">${r.applied} · ✓${r.verified}</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(r.applied/max*100)}%"></div></div>`;chart.append(d);});c.append(chart);
   }
 
-  async function searchLessons(){const p=new URLSearchParams();const q=$('#lessonSearch').value.trim(),project=$('#lessonProject').value,agent=$('#lessonAgent').value;if(q)p.set('q',q);if(project)p.set('project',project);if(agent)p.set('agent',agent);const lessons=await api('/api/memory/lessons?'+p.toString());const box=$('#lessonList');box.replaceChildren();lessons.forEach(l=>box.append(createLessonRow(l)));$('#lessonEmpty').classList.toggle('hidden',lessons.length>0);}
-  function createLessonRow(l){const b=document.createElement('button');b.type='button';b.className='lesson-row';b.dataset.lessonOpen=l.id;b.innerHTML=`<div class="min-w-0"><div class="lesson-title">${escapeHtml(l.title)}</div><div class="lesson-mobile-meta">${escapeHtml(l.project)} · ${escapeHtml(l.agent)} · ${escapeHtml(l.scope)}</div></div><div class="lesson-meta"><div>${escapeHtml(l.project)}</div><div>${escapeHtml(l.agent)} · ${escapeHtml(l.scope)}</div></div><div class="lesson-stats">${l.appliedCount} примен.<br>✓ ${l.verifiedCount} подтверждено</div>`;return b;}
+  function setRecentTab(tab){state.recentTab=tab;$$('[data-recent-tab]').forEach(b=>b.classList.toggle('active',b.dataset.recentTab===tab));renderRecent();}
+  function renderRecent(){
+    const m=state.dashboard.metrics; const src=state.recentTab==='applied'?m.recentApplied:state.recentTab==='added'?m.recentAdded:m.recentReads; const items=src||[];
+    const c=$('#recentContent'); c.replaceChildren();
+    if(!items.length){const d=document.createElement('div');d.className='recent-empty';d.textContent='Пока нет данных';c.append(d);return;}
+    const ts=state.recentTab==='applied'?'appliedAt':state.recentTab==='added'?'addedAt':'readAt';
+    const list=document.createElement('div');list.className='simple-list';
+    items.slice(0,5).forEach(x=>{const d=document.createElement('div');d.className='recent-item';d.innerHTML='<span class="recent-title">'+escapeHtml(x.title||x.id)+'</span><span class="muted">'+formatTs(x[ts])+'</span>';list.append(d);});
+    c.append(list);
+  }
 
-  async function searchProblems(){const p=new URLSearchParams();const q=$('#problemSearch').value.trim(),project=$('#problemProject').value;if(q)p.set('q',q);if(project)p.set('project',project);const items=await api('/api/memory/problems?'+p.toString());const box=$('#problemList');box.replaceChildren();items.forEach(p=>{const b=document.createElement('button');b.type='button';b.className='problem-row';b.innerHTML=`<div class="row-main"><div class="row-title">${escapeHtml(p.title)}</div><div class="row-sub">${escapeHtml(p.summary)}</div><div class="row-extra">${escapeHtml(p.project)} · ${p.solutionCount} решений</div></div><div class="row-side">${p.appliedCount} примен.<br>✓ ${p.verifiedCount}</div>`;box.append(b);});$('#problemEmpty').classList.toggle('hidden',items.length>0);}
+  async function searchLessons(){const p=new URLSearchParams();const q=$('#lessonSearch').value.trim(),project=$('#lessonProject').value,agent=$('#lessonAgent').value;if(q)p.set('q',q);if(project)p.set('project',project);if(agent)p.set('agent',agent);const lessons=await api('/api/memory/lessons?'+p.toString());lessons.sort(lessonSortCmp);const box=$('#lessonList');box.replaceChildren();lessons.forEach(l=>box.append(createLessonRow(l)));$('#lessonEmpty').classList.toggle('hidden',lessons.length>0);}
+  function createLessonRow(l){const b=document.createElement('button');b.type='button';b.className='lesson-row';b.dataset.lessonOpen=l.id;const added=formatTs(l.occurredAt);b.innerHTML=`<div class="min-w-0"><div class="lesson-title">${escapeHtml(l.title)}</div><div class="lesson-date">${added?'Добавлено '+added:''}</div><div class="lesson-mobile-meta">${escapeHtml(l.project)} · ${escapeHtml(l.agent)} · ${escapeHtml(l.scope)}</div></div><div class="lesson-meta"><div>${escapeHtml(l.project)}</div><div>${escapeHtml(l.agent)} · ${escapeHtml(l.scope)}</div></div><div class="lesson-stats">${l.appliedCount} примен.<br>✓ ${l.verifiedCount} подтверждено</div>`;return b;}
+
+  async function searchProblems(){const p=new URLSearchParams();const q=$('#problemSearch').value.trim(),project=$('#problemProject').value;if(q)p.set('q',q);if(project)p.set('project',project);const items=await api('/api/memory/problems?'+p.toString());const box=$('#problemList');box.replaceChildren();items.forEach(p=>{const b=document.createElement('button');b.type='button';b.className='problem-row';b.innerHTML=`<div class="row-main"><div class="row-title">${escapeHtml(p.title)}</div><div class="row-sub">${escapeHtml(p.summary)}</div><div class="row-extra">${escapeHtml(p.project)} · ${p.solutionCount} решений</div></div><div class="row-side">${p.appliedCount} примен.<br>✓ ${p.verifiedCount} подтверждено</div>`;box.append(b);});$('#problemEmpty').classList.toggle('hidden',items.length>0);}
 
   async function searchSkills(){const p=new URLSearchParams();const q=$('#skillSearch').value.trim();if(q)p.set('q',q);const items=await api('/api/memory/skills?'+p.toString());const box=$('#skillList');box.replaceChildren();items.forEach(s=>{const d=document.createElement('div');d.className='skill-row'+(s.status==='obsolete'?' muted':'');d.innerHTML=`<div class="row-main"><div class="row-title">${escapeHtml(s.name)}</div><div class="row-sub">${escapeHtml(s.description)}</div></div><div class="row-side">${escapeHtml(s.project)}<br>${escapeHtml(s.version)} · ${escapeHtml(s.status)}</div>`;box.append(d);});$('#skillEmpty').classList.toggle('hidden',items.length>0);}
 
   function renderSystem(){const s=state.memoryStatus;const cards=[['База',s.database],['Hindsight',s.hindsight],['Worker',s.worker],['Очередь',{status:`${s.queue.queued} queued · ${s.queue.failed} failed`,requiresAttention:s.queue.failed>0}]];$('#systemCards').innerHTML=cards.map(([name,v])=>`<div class="system-card"><div class="system-title"><span class="status-dot ${v.requiresAttention?'work':'done'}"></span>${name}</div><div class="system-sub">${escapeHtml(v.status)}</div></div>`).join('');$('#systemJobs').innerHTML=s.jobs.map(j=>`<div class="simple-item"><span>${escapeHtml(j.id)}</span><span class="muted">${escapeHtml(j.status)}</span></div>`).join('');$('#systemComputers').innerHTML=s.computers.map(c=>`<div class="simple-item"><span>${escapeHtml(c.name)}</span><span class="muted">${escapeHtml(c.status)}</span></div>`).join('');}
 
-  function openLesson(id){const l=state.dashboard.lessons.find(x=>String(x.id)===String(id));if(!l)return;state.selectedLesson=id;$('#memoryMain').classList.add('hidden');$('#lessonDetail').classList.remove('hidden');$('#lessonDetailProject').textContent=l.project;$('#lessonDetailScope').textContent=`${l.scope} · ${l.status}`;$('#lessonDetailTitle').textContent=l.title;$('#lessonDetailMeta').textContent=`${l.agent} · ${l.appliedCount} применений · ${l.verifiedCount} подтверждено`;$('#lessonProblem').textContent=l.problem;$('#lessonConditions').textContent=l.conditions;$('#lessonCause').textContent=l.cause;$('#lessonMethod').textContent=l.workingMethod;$('#lessonEvidence').textContent=`${l.evidence} ${l.verification}`;}
+  function openLesson(id){const l=state.dashboard.lessons.find(x=>String(x.id)===String(id));if(!l)return;state.selectedLesson=id;$('#memoryMain').classList.add('hidden');$('#lessonDetail').classList.remove('hidden');$('#lessonDetailProject').textContent=l.project;$('#lessonDetailScope').textContent=`${l.scope} · ${l.status}`;$('#lessonDetailTitle').textContent=l.title;$('#lessonDetailMeta').textContent=`${l.agent} · ${l.appliedCount} применений · ${l.verifiedCount} подтверждено`;$('#lessonDetailDates').textContent=`Добавлен: ${formatTs(l.occurredAt)} · Прочитан: ${formatTs(l.lastReadAt)||'—'} · Применён: ${formatTs(l.lastAppliedAt)||'—'}`;$('#lessonProblem').textContent=l.problem;$('#lessonConditions').textContent=l.conditions;$('#lessonCause').textContent=l.cause;$('#lessonMethod').textContent=l.workingMethod;$('#lessonEvidence').textContent=`${l.evidence} ${l.verification}`;}
   function closeLesson(){state.selectedLesson=null;$('#lessonDetail').classList.add('hidden');$('#memoryMain').classList.remove('hidden');}
   function projectName(id){if(id==='lost-cyber-hamster-2025')return'Lost Cyber Hamster';if(id==='agent-memory-system')return'Общая память агентов';if(id==='*')return'Общий опыт';return id;}
   function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));}
+  function formatTs(iso){if(!iso)return'';const d=new Date(iso);if(isNaN(d.getTime()))return'';const p=n=>String(n).padStart(2,'0');return `${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;}
+  function tsDiff(a,b){if(!a&&!b)return 0;if(!a)return 1;if(!b)return -1;return b.localeCompare(a);}
+  function lessonSortCmp(a,b){const by=state.lessonSort;let d=0;if(by==='applied'){d=(b.appliedCount??0)-(a.appliedCount??0);if(!d)d=tsDiff(a.lastAppliedAt,b.lastAppliedAt);}else if(by==='read'){d=tsDiff(a.lastReadAt,b.lastReadAt);}else{d=tsDiff(a.occurredAt,b.occurredAt);}return d?d:String(a.title??'').localeCompare(String(b.title??''));}
   function debounce(fn,delay=220){let timer;return(...args)=>{clearTimeout(timer);timer=setTimeout(()=>fn(...args),delay);};}
 
   // -------- Кнопки «Свернуть все» / «Развернуть все»: шевроны вместо текста --------
@@ -241,6 +255,8 @@
   $('#problemProject').addEventListener('change',()=>searchProblems().catch(e=>showToast(e.message)));
   $('#skillSearch').addEventListener('input',debounce(()=>searchSkills().catch(e=>showToast(e.message))));
   $('#lessonBack').addEventListener('click',closeLesson);
+  $$('[data-lesson-sort]').forEach(b=>b.addEventListener('click',()=>{state.lessonSort=b.dataset.lessonSort;$$('[data-lesson-sort]').forEach(x=>x.classList.toggle('active',x===b));searchLessons().catch(e=>showToast(e.message));}));
+  $$('[data-recent-tab]').forEach(b=>b.addEventListener('click',()=>setRecentTab(b.dataset.recentTab)));
 
   document.addEventListener('click',async e=>{
     try{

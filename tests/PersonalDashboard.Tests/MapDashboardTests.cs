@@ -29,6 +29,11 @@ public sealed class MapDashboardTests
         Assert.AreEqual(2, lesson.VerifiedCount);
         Assert.AreEqual(DateTimeOffset.Parse("2026-09-15T09:00:00Z"), lesson.OccurredAt);
         Assert.IsTrue(lesson.Id != 0, "lesson id hashed from string id");
+        Assert.IsNotNull(lesson.LastReadAt);
+        Assert.AreEqual(DateTimeOffset.Parse("2026-09-15T09:00:00Z"), lesson.LastReadAt);
+        Assert.AreEqual(2, lesson.ReadCount);
+        Assert.IsNotNull(lesson.LastAppliedAt);
+        Assert.AreEqual(DateTimeOffset.Parse("2026-09-16T09:00:00Z"), lesson.LastAppliedAt);
 
         // ----- problems -----
         Assert.AreEqual(1, payload.Problems.Count);
@@ -66,6 +71,19 @@ public sealed class MapDashboardTests
         Assert.AreEqual(4, byProject.GetProperty("lost-cyber-hamster-2025").GetProperty("applied").GetInt32());
         Assert.AreEqual(1, metrics.GetProperty("recentPrepares").EnumerateArray().Count());
 
+        var recentRead = metrics.GetProperty("recentReads").EnumerateArray().First();
+        Assert.AreEqual("l1", recentRead.GetProperty("id").GetString());
+        Assert.AreEqual("Пересборка кэша", recentRead.GetProperty("title").GetString());
+        Assert.AreEqual("2026-09-15T09:00:00Z", recentRead.GetProperty("readAt").GetString());
+        var recentApply = metrics.GetProperty("recentApplied").EnumerateArray().First();
+        Assert.AreEqual("l1", recentApply.GetProperty("id").GetString());
+        Assert.AreEqual("Пересборка кэша", recentApply.GetProperty("title").GetString());
+        Assert.AreEqual("2026-09-16T09:00:00Z", recentApply.GetProperty("appliedAt").GetString());
+        var recentAdd = metrics.GetProperty("recentAdded").EnumerateArray().First();
+        Assert.AreEqual("l1", recentAdd.GetProperty("id").GetString());
+        Assert.AreEqual("Пересборка кэша", recentAdd.GetProperty("title").GetString());
+        Assert.AreEqual("2026-09-15T09:00:00Z", recentAdd.GetProperty("addedAt").GetString());
+
         // ----- window -----
         Assert.AreEqual("24h", payload.Window);
     }
@@ -87,5 +105,16 @@ public sealed class MapDashboardTests
         Assert.AreEqual(0, payload.SkillEvents.Count);
         Assert.AreEqual(0, TestJson.RoundTrip(payload.Metrics).GetProperty("lessonsTotal").GetInt32());
         Assert.AreEqual("", payload.Window);
+
+        // Old-gateway contract: absent optional lesson fields -> null/0, absent
+        // recent-activity feeds -> empty arrays (never a crash).
+        var bareLesson = MemoryRepository.MapDashboard(TestJson.Parse("{\"lessons\":[{}]}"));
+        Assert.IsNull(bareLesson.Lessons[0].LastReadAt);
+        Assert.AreEqual(0, bareLesson.Lessons[0].ReadCount);
+        Assert.IsNull(bareLesson.Lessons[0].LastAppliedAt);
+        var tolerantMetrics = TestJson.RoundTrip(payload.Metrics);
+        Assert.AreEqual(0, tolerantMetrics.GetProperty("recentReads").EnumerateArray().Count());
+        Assert.AreEqual(0, tolerantMetrics.GetProperty("recentApplied").EnumerateArray().Count());
+        Assert.AreEqual(0, tolerantMetrics.GetProperty("recentAdded").EnumerateArray().Count());
     }
 }

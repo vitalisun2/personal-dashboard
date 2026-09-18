@@ -18,7 +18,10 @@
       "computer": "DESKTOP",
       "occurred_at": "2026-09-15T09:00:00Z",
       "applied_count": 4,
-      "verified_count": 2
+      "verified_count": 2,
+      "last_read_at": "2026-09-15T09:00:00Z",
+      "read_count": 2,
+      "last_applied_at": "2026-09-16T09:00:00Z"
     }
   ],
   "problems": [
@@ -89,6 +92,15 @@
         "found_records": 1,
         "warning": null
       }
+    ],
+    "recent_reads": [
+      { "id": "l1", "title": "Пересборка кэша", "read_at": "2026-09-15T09:00:00Z" }
+    ],
+    "recent_applied": [
+      { "id": "l1", "title": "Пересборка кэша", "applied_at": "2026-09-16T09:00:00Z" }
+    ],
+    "recent_added": [
+      { "id": "l1", "title": "Пересборка кэша", "added_at": "2026-09-15T09:00:00Z" }
     ],
     "note": "..."
   },

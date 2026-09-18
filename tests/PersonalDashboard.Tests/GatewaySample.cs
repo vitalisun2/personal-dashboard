@@ -13,7 +13,8 @@ public static class GatewaySample
         "\"title\":\"Пересборка кэша\",\"problem\":\"Спрайт не попадает в бандл\",\"conditions\":\"Android bundle\"," +
         "\"cause\":\"Кэш устарел\",\"working_method\":\"Пересобрать бандл\",\"evidence\":\"sha256:abc\"," +
         "\"verification\":\"хэш совпал\",\"status\":\"active\",\"agent\":\"codex\",\"computer\":\"DESKTOP\"," +
-        "\"occurred_at\":\"2026-09-15T09:00:00Z\",\"applied_count\":4,\"verified_count\":2}]," +
+        "\"occurred_at\":\"2026-09-15T09:00:00Z\",\"applied_count\":4,\"verified_count\":2," +
+        "\"last_read_at\":\"2026-09-15T09:00:00Z\",\"read_count\":2,\"last_applied_at\":\"2026-09-16T09:00:00Z\"}]," +
         "\"problems\":[{" +
         "\"id\":\"p1\",\"title\":\"Спрайт пропал\",\"summary\":\"Не попадает в бандл\",\"scope\":\"project\"," +
         "\"project_id\":\"lost-cyber-hamster-2025\",\"solution_count\":1,\"applied_count\":4,\"verified_count\":2," +
@@ -34,6 +35,9 @@ public static class GatewaySample
         "\"recent_prepares\":[{" +
         "\"agent\":\"codex\",\"computer\":\"DESKTOP\",\"occurred_at\":\"2026-09-15T09:00:00Z\"," +
         "\"project_id\":\"*\",\"task\":\"Починить спрайт\",\"found_records\":1,\"warning\":null}]," +
+        "\"recent_reads\":[{\"id\":\"l1\",\"title\":\"Пересборка кэша\",\"read_at\":\"2026-09-15T09:00:00Z\"}]," +
+        "\"recent_applied\":[{\"id\":\"l1\",\"title\":\"Пересборка кэша\",\"applied_at\":\"2026-09-16T09:00:00Z\"}]," +
+        "\"recent_added\":[{\"id\":\"l1\",\"title\":\"Пересборка кэша\",\"added_at\":\"2026-09-15T09:00:00Z\"}]," +
         "\"note\":\"...\"}," +
         "\"window\":\"24h\"}";
 
