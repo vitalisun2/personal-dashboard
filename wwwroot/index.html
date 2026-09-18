@@ -163,8 +163,32 @@
             </div>
           </div>
         </section>
-      </section>
-    </main>
+
+                <section id="problemDetail" class="detail hidden">
+                  <button id="problemDetailBack" class="back-button" type="button">← Вернуться к списку</button>
+                  <div class="detail-inner wide">
+                    <div class="lesson-detail-badges"><span id="problemDetailScope" class="detail-section"></span><span id="problemDetailProject" class="muted"></span></div>
+                    <h1 id="problemDetailTitle"></h1>
+                    <div id="problemDetailMeta" class="muted small-text"></div>
+                    <div class="description-card"><div class="description-label">Сводка</div><p id="problemDetailSummary"></p></div>
+                    <div class="description-card"><div class="description-label">Решения</div><div id="problemDetailSolutions" class="solutions-list"></div></div>
+                  </div>
+                </section>
+
+                <section id="skillDetail" class="detail hidden">
+                  <button id="skillDetailBack" class="back-button" type="button">← Вернуться к списку</button>
+                  <div class="detail-inner wide">
+                    <div class="lesson-detail-badges"><span id="skillDetailProject" class="detail-section"></span><span id="skillDetailStatus" class="skill-status-chip"></span><span id="skillDetailScope" class="muted"></span></div>
+                    <h1 id="skillDetailTitle"></h1>
+                    <div id="skillDetailMeta" class="muted small-text"></div>
+                    <div class="description-card"><div class="description-label">Описание</div><p id="skillDetailDescription"></p></div>
+                    <div id="skillDetailExampleCard" class="description-card hidden"><div class="description-label">Проверенный пример</div><pre id="skillDetailExample" class="example-block"></pre></div>
+                    <div id="skillDetailDepsCard" class="description-card hidden"><div class="description-label">Зависимости</div><ul id="skillDetailDeps" class="deps-list"></ul></div>
+                    <div id="skillDetailComputersCard" class="description-card hidden"><div class="description-label">Компьютеры</div><div id="skillDetailComputers" class="computer-chips"></div></div>
+                  </div>
+                </section>
+              </section>
+            </main>
 
     <nav class="bottom-nav" aria-label="Главная навигация">
       <button class="bottom-item active" data-main="tasks" type="button"><span>✓</span><small>Задачи</small></button>

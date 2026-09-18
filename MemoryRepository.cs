@@ -23,7 +23,18 @@ record MemoryLesson(int Id, string Title, string Method, string Problem, string 
     DateTimeOffset? LastReadAt = null, int ReadCount = 0, DateTimeOffset? LastAppliedAt = null);
 
 record MemoryProblem(int Id, string Title, string Summary, string Scope, string ProjectId, string Project,
-    int SolutionCount, int AppliedCount, int VerifiedCount, DateTimeOffset LastChange);
+    int SolutionCount, int AppliedCount, int VerifiedCount, DateTimeOffset LastChange, List<MemoryLesson> Solutions)
+{
+    // Secondary positional constructor without solutions: MockMemoryRepository and
+    // other callers keep compiling; new problems start with an empty (never null)
+    // list instead of a C# record default (collection expressions are not allowed
+    // as default parameter values).
+    public MemoryProblem(int Id, string Title, string Summary, string Scope, string ProjectId, string Project,
+        int SolutionCount, int AppliedCount, int VerifiedCount, DateTimeOffset LastChange)
+        : this(Id, Title, Summary, Scope, ProjectId, Project, SolutionCount, AppliedCount, VerifiedCount, LastChange, new List<MemoryLesson>())
+    {
+    }
+}
 
 record MemorySkill(int Id, string Name, string Description, string Scope, string ProjectId, string Project,
     string Status, string Source, string Computer, string Version, int VersionCount, string[] Dependencies,
@@ -351,7 +362,10 @@ sealed class MemoryRepository : IMemoryRepository
         Int(Prop(e, "solution_count")),
         Int(Prop(e, "applied_count")),
         Int(Prop(e, "verified_count")),
-        Iso(Prop(e, "last_change")) ?? Epoch());
+                Iso(Prop(e, "last_change")) ?? Epoch(),
+                // The gateway returns each problem's own solutions as a lessons[] array;
+                // absent on the old gateway -> empty list, never null.
+                ArrayNodes(e, "lessons").Select(n => MapLesson(n, 0, 0)).ToList());
 
     // The gateway persists one row per (skill name, computer), so duplicates are
     // collapsed here: one MemorySkill per unique name (case-insensitive).

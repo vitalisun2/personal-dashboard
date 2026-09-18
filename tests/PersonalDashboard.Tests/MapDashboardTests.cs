@@ -45,6 +45,13 @@ public sealed class MapDashboardTests
         Assert.AreEqual(4, problem.AppliedCount);
         Assert.AreEqual(2, problem.VerifiedCount);
 
+        // The gateway's per-problem lessons[] maps onto problem.Solutions.
+        Assert.AreEqual(1, problem.Solutions.Count);
+        var solution = problem.Solutions[0];
+        Assert.AreEqual("Пересборка кэша", solution.Title);
+        Assert.AreEqual(4, solution.AppliedCount);
+        Assert.AreEqual(2, solution.VerifiedCount);
+
         // ----- skills -----
         Assert.AreEqual(1, payload.Skills.Count);
         var skill = payload.Skills[0];
@@ -116,5 +123,9 @@ public sealed class MapDashboardTests
         Assert.AreEqual(0, tolerantMetrics.GetProperty("recentReads").EnumerateArray().Count());
         Assert.AreEqual(0, tolerantMetrics.GetProperty("recentApplied").EnumerateArray().Count());
         Assert.AreEqual(0, tolerantMetrics.GetProperty("recentAdded").EnumerateArray().Count());
+
+        // Old-gateway contract: a problem without lessons -> empty Solutions, never null.
+        var bareProblem = MemoryRepository.MapDashboard(TestJson.Parse("{\"problems\":[{}]}"));
+        Assert.AreEqual(0, bareProblem.Problems[0].Solutions.Count);
     }
 }

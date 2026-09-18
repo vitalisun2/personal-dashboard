@@ -34,7 +34,31 @@
       "solution_count": 1,
       "applied_count": 4,
       "verified_count": 2,
-      "last_change": "2026-09-15T09:00:00Z"
+      "last_change": "2026-09-15T09:00:00Z",
+      "lessons": [
+        {
+          "id": "l1",
+          "method": "cache-rebuild",
+          "scope": "project",
+          "project_id": "lost-cyber-hamster-2025",
+          "title": "Пересборка кэша",
+          "problem": "Спрайт не попадает в бандл",
+          "conditions": "Android bundle",
+          "cause": "Кэш устарел",
+          "working_method": "Пересобрать бандл",
+          "evidence": "sha256:abc",
+          "verification": "хэш совпал",
+          "status": "active",
+          "agent": "codex",
+          "computer": "DESKTOP",
+          "occurred_at": "2026-09-15T09:00:00Z",
+          "applied_count": 4,
+          "verified_count": 2,
+          "last_read_at": "2026-09-15T09:00:00Z",
+          "read_count": 2,
+          "last_applied_at": "2026-09-16T09:00:00Z"
+        }
+      ]
     }
   ],
   "skills": [
