@@ -227,30 +227,39 @@ sealed class MemoryRepository : IMemoryRepository
                     warning = NullableStr(Prop(p, "warning"))
                 });
             }
+        // Lessons are mapped after applied/verified events attach to them, so the
+        // cards carry both the gateway's own counts and re-attached dead-link events.
+        var lessonNodes = ArrayNodes(root, "lessons");
+        var lessonCounters = MatchLessonEvents(ArrayNodes(root, "skill_events"), lessonNodes);
+        var lessons = new List<MemoryLesson>();
+        var index = 0;
+        foreach (var node in lessonNodes)
+        {
+            lessons.Add(MapLesson(node, lessonCounters[index].Applied, lessonCounters[index].Verified));
+            index++;
+        }
+        var problems = new List<MemoryProblem>();
+        foreach (var node in ArrayNodes(root, "problems"))
+            problems.Add(MapProblem(node));
+        // The gateway stores one skill row per computer, so rows repeat per unique
+        // skill name; MapSkills merges them into one card per name.
+        var skills = MapSkills(ArrayNodes(root, "skills"));
+        var events = new List<SkillEvent>();
+        foreach (var node in ArrayNodes(root, "skill_events"))
+            events.Add(MapSkillEvent(node));
         var metricObject = new
         {
             lessonsTotal = Int(Prop(metrics, "lessons_total")),
             appliedTotal = Int(Prop(metrics, "applied_total")),
             verifiedTotal = Int(Prop(metrics, "verified_total")),
             problemsTotal = Int(Prop(metrics, "problems_total")),
-            skillsTotal = Int(Prop(metrics, "skills_total")),
+            // Unique skill names, not the gateway's per-computer row counter.
+            skillsTotal = skills.Count,
             byAgent = MapCounters(Prop(metrics, "by_agent")),
             byProject = MapCounters(Prop(metrics, "by_project")),
             recentPrepares = prepares.ToArray(),
             note = Str(Prop(metrics, "note"))
         };
-        var lessons = new List<MemoryLesson>();
-        foreach (var node in ArrayNodes(root, "lessons"))
-            lessons.Add(MapLesson(node));
-        var problems = new List<MemoryProblem>();
-        foreach (var node in ArrayNodes(root, "problems"))
-            problems.Add(MapProblem(node));
-        var skills = new List<MemorySkill>();
-        foreach (var node in ArrayNodes(root, "skills"))
-            skills.Add(MapSkill(node));
-        var events = new List<SkillEvent>();
-        foreach (var node in ArrayNodes(root, "skill_events"))
-            events.Add(MapSkillEvent(node));
         return new Payload(lessons, problems, skills, events, metricObject, Str(Prop(root, "window")));
     }
 
@@ -269,7 +278,7 @@ sealed class MemoryRepository : IMemoryRepository
         return result;
     }
 
-    private static MemoryLesson MapLesson(JsonElement e) => new(
+    private static MemoryLesson MapLesson(JsonElement e, int matchedApplied, int matchedVerified) => new(
         HashId(Str(Prop(e, "id"))),
         Str(Prop(e, "title")),
         Str(Prop(e, "method")),
@@ -286,8 +295,11 @@ sealed class MemoryRepository : IMemoryRepository
         Str(Prop(e, "agent")),
         Str(Prop(e, "computer")),
         Iso(Prop(e, "occurred_at")) ?? Epoch(),
-        Int(Prop(e, "applied_count")),
-        Int(Prop(e, "verified_count")));
+        // The gateway counts applications/verifications by live links only; events
+        // whose links point at removed lessons are re-attached by MatchLessonEvents,
+        // which can raise the counters but never lower the gateway's own numbers.
+        Max(Int(Prop(e, "applied_count")), matchedApplied),
+        Max(Int(Prop(e, "verified_count")), matchedVerified));
 
     private static MemoryProblem MapProblem(JsonElement e) => new(
         HashId(Str(Prop(e, "id"))),
@@ -301,28 +313,99 @@ sealed class MemoryRepository : IMemoryRepository
         Int(Prop(e, "verified_count")),
         Iso(Prop(e, "last_change")) ?? Epoch());
 
-    private static MemorySkill MapSkill(JsonElement e)
+    // The gateway persists one row per (skill name, computer), so duplicates are
+    // collapsed here: one MemorySkill per unique name (case-insensitive).
+    private static List<MemorySkill> MapSkills(List<JsonElement> nodes)
     {
+        var order = new List<string>();
+        var groups = new Dictionary<string, List<JsonElement>>(StringComparer.Ordinal);
+        foreach (var node in nodes)
+        {
+            var name = Str(Prop(node, "name"));
+            if (name.Length == 0) continue;
+            var key = name.ToLower();
+            if (!groups.ContainsKey(key))
+            {
+                groups[key] = new List<JsonElement>();
+                order.Add(key);
+            }
+            groups[key].Add(node);
+        }
+        var skills = new List<MemorySkill>();
+        foreach (var key in order)
+            skills.Add(MapSkillGroup(groups[key]));
+        return skills;
+    }
+
+    private static MemorySkill MapSkillGroup(List<JsonElement> group)
+    {
+        // Every field except computer/version_count/project_id comes from the row
+        // with the newest updated_at; computers are merged, version_count summed,
+        // and a concrete project_id is preferred over the '*' bucket.
+        JsonElement? freshest = null;
+        var freshestUpdated = Epoch();
+        var computers = new List<string>();
+        var computersLower = new List<string>();
+        var versionCount = 0;
+        var projectId = "";
+        var hasConcreteProject = false;
+        foreach (var node in group)
+        {
+            var computer = Str(Prop(node, "computer"));
+            if (computer.Length > 0)
+            {
+                var computerLower = computer.ToLower();
+                var seen = false;
+                foreach (var known in computersLower)
+                {
+                    if (known == computerLower) { seen = true; break; }
+                }
+                if (!seen)
+                {
+                    computers.Add(computer);
+                    computersLower.Add(computerLower);
+                }
+            }
+            versionCount += Int(Prop(node, "version_count"));
+            var candidateProject = Str(Prop(node, "project_id"));
+            if (candidateProject.Length > 0)
+            {
+                if (candidateProject != "*" && !hasConcreteProject)
+                {
+                    projectId = candidateProject;
+                    hasConcreteProject = true;
+                }
+                else if (projectId.Length == 0)
+                {
+                    projectId = candidateProject;
+                }
+            }
+            var updated = Iso(Prop(node, "updated_at")) ?? Epoch();
+            if (freshest is null || updated > freshestUpdated)
+            {
+                freshest = node;
+                freshestUpdated = updated;
+            }
+        }
         var dependencies = new List<string>();
-        var dependencyNodes = ArrayNodes(e, "dependencies");
-        foreach (var d in dependencyNodes)
+        foreach (var d in ArrayNodes(freshest, "dependencies"))
             dependencies.Add(Str(d));
         return new MemorySkill(
-            HashId(Str(Prop(e, "id"))),
-            Str(Prop(e, "name")),
-            Str(Prop(e, "description")),
-            Str(Prop(e, "scope")),
-            Str(Prop(e, "project_id")),
-            ProjectName(Str(Prop(e, "project_id"))),
-            Str(Prop(e, "status")),
-            Str(Prop(e, "source")),
-            Str(Prop(e, "computer")),
-            Str(Prop(e, "version")),
-            Int(Prop(e, "version_count")),
+            HashId(Str(Prop(freshest, "name"))),
+            Str(Prop(freshest, "name")),
+            Str(Prop(freshest, "description")),
+            Str(Prop(freshest, "scope")),
+            projectId,
+            ProjectName(projectId),
+            Str(Prop(freshest, "status")),
+            Str(Prop(freshest, "source")),
+            string.Join(", ", computers),
+            Str(Prop(freshest, "version")),
+            versionCount,
             dependencies.ToArray(),
-            Str(Prop(e, "verified_example")),
-            Iso(Prop(e, "registered_at")) ?? Epoch(),
-            Iso(Prop(e, "updated_at")) ?? Epoch());
+            Str(Prop(freshest, "verified_example")),
+            Iso(Prop(freshest, "registered_at")) ?? Epoch(),
+            Iso(Prop(freshest, "updated_at")) ?? Epoch());
     }
 
     private static SkillEvent MapSkillEvent(JsonElement e)
@@ -338,6 +421,138 @@ sealed class MemoryRepository : IMemoryRepository
             Iso(Prop(e, "occurred_at")) ?? Epoch(),
             Str(Prop(e, "project_id")));
     }
+
+    // -------- applied/verified event -> lesson attachment --------
+
+    private record LessonCounters(int Applied, int Verified);
+
+    // Sentinels for the lesson indexes: no lesson matched, or several lessons
+    // share the same fallback key (ambiguous -> events are not auto-attached).
+    private static readonly int NoLesson = -1;
+    private static readonly int Ambiguous = -2;
+
+    // Counts applied/verified events per lesson: explicit links win, then
+    // (project_id, method) after trim/casefold, then (project_id, method with
+    // leading filler words stripped). Events that match nothing stay unassigned
+    // (their counts are never invented) and each event lands on at most one lesson.
+    private static List<LessonCounters> MatchLessonEvents(List<JsonElement> eventNodes, List<JsonElement> lessonNodes)
+    {
+        var counters = new List<LessonCounters>();
+        var byId = new Dictionary<string, int>(StringComparer.Ordinal);
+        var byProjectMethod = new Dictionary<string, int>(StringComparer.Ordinal);
+        var byProjectNormalized = new Dictionary<string, int>(StringComparer.Ordinal);
+        var lesson = 0;
+        foreach (var node in lessonNodes)
+        {
+            counters.Add(new LessonCounters(0, 0));
+            var id = Str(Prop(node, "id"));
+            if (id.Length > 0 && !byId.ContainsKey(id))
+                byId[id] = lesson;
+            IndexLessonKey(byProjectMethod, ProjectMethodKey(Str(Prop(node, "project_id")), Str(Prop(node, "method"))), lesson);
+            IndexLessonKey(byProjectNormalized, ProjectMethodKey(Str(Prop(node, "project_id")), NormalizeMethod(Str(Prop(node, "method")))), lesson);
+            lesson++;
+        }
+        foreach (var eventNode in eventNodes)
+        {
+            var kind = Str(Prop(eventNode, "kind")).ToLower();
+            if (kind != "applied" && kind != "verified") continue;
+            var hit = MatchEventToLesson(eventNode, byId, byProjectMethod, byProjectNormalized);
+            if (hit < 0) continue;
+            var countersNow = counters[hit];
+            counters[hit] = kind == "applied"
+                ? new LessonCounters(countersNow.Applied + 1, countersNow.Verified)
+                : new LessonCounters(countersNow.Applied, countersNow.Verified + 1);
+        }
+        return counters;
+    }
+
+    private static void IndexLessonKey(Dictionary<string, int> index, string key, int lesson)
+    {
+        if (!index.ContainsKey(key))
+        {
+            index[key] = lesson;
+            return;
+        }
+        var existing = index[key];
+        if (existing != lesson && existing >= 0)
+            index[key] = Ambiguous;
+    }
+
+    private static int MatchEventToLesson(JsonElement eventNode,
+        Dictionary<string, int> byId, Dictionary<string, int> byProjectMethod, Dictionary<string, int> byProjectNormalized)
+    {
+        // (a) explicit links -> live lesson id.
+        foreach (var link in ArrayNodes(eventNode, "links"))
+        {
+            var target = Str(link);
+            if (target.Length > 0 && byId.ContainsKey(target))
+                return byId[target];
+        }
+        var projectId = Str(Prop(eventNode, "project_id"));
+        var method = Str(Prop(eventNode, "method"));
+        // (b) exact (project_id, method) after trim/casefold.
+        var exact = LookupIndex(byProjectMethod, ProjectMethodKey(projectId, method));
+        if (exact >= 0) return exact;
+        // (c) same project, method with leading stop-prefixes stripped ("В VS Code…" -> "vs code…").
+        return LookupIndex(byProjectNormalized, ProjectMethodKey(projectId, NormalizeMethod(method)));
+    }
+
+    private static int LookupIndex(Dictionary<string, int> index, string key)
+    {
+        return index.ContainsKey(key) ? index[key] : NoLesson;
+    }
+
+    private static string ProjectMethodKey(string projectId, string method)
+    {
+        return projectId.ToLower() + "|" + method.ToLower();
+    }
+
+    // Leading filler cut from event method phrases before comparing with lesson
+    // methods: "В VS Code…" -> "vs code…"; applied iteratively so stacked prefixes
+    // ("использовать в VS Code…") unwind in order. Every prefix ends with a space,
+    // so real words ("вставить", "installer") are never clipped.
+    private static readonly string[] MethodStopPrefixes =
+    {
+        // русские предлоги
+        "в ", "во ", "на ", "по ", "для ", "с ", "со ", "через ", "при ", "к ", "ко ", "из ", "от ", "о ", "об ",
+        // русские обороты
+        "использовать ", "использование ", "использован ", "используется ", "используя ",
+        "установка ", "установить ", "установлен ", "настройка ", "настроить ", "настроен ",
+        "запуск ", "запустить ", "запущен ", "выполнить ", "выполнена ", "выполнено ",
+        "прочитать ", "прочитан ", "проверить ", "проверка ", "создать ", "создание ", "создан ",
+        "починить ", "починка ", "ускорять ", "ускорить ",
+        // английские артикли/предлоги
+        "the ", "a ", "an ", "to ", "for ", "with ", "in ", "on ", "at ", "from ", "of ", "by ", "via ", "using ",
+        // английские глаголы
+        "use ", "install ", "installing ", "installed ", "setup ", "set up ", "run ", "running ", "ran ",
+        "create ", "creating ", "created ", "configure ", "configuring ", "configured ",
+        "enable ", "enabled ", "disable ", "disabled ", "fix ", "fixed ", "repair ", "repairing ",
+        "check ", "checking ", "read ", "reading ", "how to ", "make ", "making ", "add ", "added ",
+        "update ", "updating ", "updated ", "probe ", "probing ", "probed ", "test ", "testing ", "tested "
+    };
+
+    private static string NormalizeMethod(string method)
+    {
+        var text = method.Trim().ToLower();
+        for (var pass = 0; pass < 8; pass++)
+        {
+            var stripped = text;
+            foreach (var prefix in MethodStopPrefixes)
+            {
+                if (text.StartsWith(prefix) && text.Length > prefix.Length)
+                {
+                    var candidate = text.Substring(prefix.Length).TrimStart();
+                    if (candidate.Length < stripped.Length) stripped = candidate;
+                }
+            }
+            if (stripped == text) break;
+            text = stripped;
+        }
+        // Never collapse to an empty key (would equate unrelated methods).
+        return text.Length == 0 ? method.Trim().ToLower() : text;
+    }
+
+    private static int Max(int a, int b) => a > b ? a : b;
 
     public static object MapStatus(JsonElement? root)
     {

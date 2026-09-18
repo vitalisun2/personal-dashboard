@@ -96,6 +96,13 @@ app.MapPut("/api/tasks/{id:guid}/description", async (Guid id, UpdateDescription
     return updated is null ? Results.NotFound() : Results.Ok(updated);
 });
 
+// Обновление заголовка задачи
+app.MapPut("/api/tasks/{id:guid}/title", async (Guid id, UpdateTitleRequest request, TaskStore store) =>
+{
+    var updated = await store.UpdateAsync(id, task => task with { Title = request.Title?.Trim() ?? task.Title });
+    return updated is null ? Results.NotFound() : Results.Ok(updated);
+});
+
 // ---------------- Agent memory (mock repository, API-shaped) ----------------
 app.MapGet("/api/memory/dashboard", async (IMemoryRepository memory) => Results.Ok(await memory.GetDashboard()));
 app.MapGet("/api/memory/status", async (IMemoryRepository memory) => Results.Ok(await memory.GetStatus()));
@@ -114,6 +121,7 @@ app.Run();
 
 record CreateTaskRequest(string? Text);
 record UpdateDescriptionRequest(string? Description);
+record UpdateTitleRequest(string? Title);
 record MoveTaskRequest(TaskBucket Bucket);
 record TaskDraft(string Title, string Description, string Section);
 record TaskItem(Guid Id, string Title, string Description, string Section, TaskBucket Bucket, TaskStatus Status, DateTimeOffset CreatedAt);
@@ -556,6 +564,12 @@ sealed class TaskStore
         _path = string.IsNullOrWhiteSpace(configured)
             ? Path.Combine(environment.ContentRootPath, "tasks.json")
             : configured;
+    }
+
+    // Test seam: explicit file path instead of the TASKS_FILE env var / server environment.
+    public TaskStore(string path)
+    {
+        _path = path;
     }
 
     public async Task<IReadOnlyList<TaskItem>> GetAllAsync()

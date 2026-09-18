@@ -75,6 +75,7 @@
 
   function showTaskDetail(task) {
     cancelDescriptionEdit();
+    cancelTitleEdit();
     state.selectedTaskId=task.id; $('#listView').classList.add('hidden'); $('#detailView').classList.remove('hidden');
     $('#detailSection').textContent=normalizeSection(task.section); $('#detailTitle').textContent=task.title; $('#detailDescription').textContent=task.description;
     const actions=$('#detailActions'); actions.replaceChildren();
@@ -125,6 +126,49 @@
     showToast('Описание сохранено');
   }
 
+  // -------- Редактирование заголовка задачи --------
+  function beginTitleEdit() {
+    if (state.editingTitle || !state.selectedTaskId) return;
+    const h = $('#detailTitle');
+    const input = document.createElement('input');
+    input.id = 'detailTitleInput'; input.className = 'description-input';
+    input.value = h.textContent;
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); cancelTitleEdit(); }
+      else if (e.key === 'Enter') { e.preventDefault(); saveTitleEdit().catch(err => showToast(err.message)); }
+    });
+    const save = document.createElement('button');
+    save.type = 'button'; save.id = 'detailTitleSave'; save.className = 'description-save';
+    save.textContent = 'OK';
+    save.addEventListener('click', () => saveTitleEdit().catch(err => showToast(err.message)));
+    state.editingTitle = true;
+    h.classList.add('hidden');
+    const wrap = h.parentElement;
+    wrap.insertBefore(input, h.nextSibling);
+    wrap.insertBefore(save, input.nextSibling);
+    input.focus();
+  }
+  function cancelTitleEdit() {
+    if (!state.editingTitle) return;
+    const input = $('#detailTitleInput'); if (input) input.remove();
+    const ok = $('#detailTitleSave'); if (ok) ok.remove();
+    $('#detailTitle').classList.remove('hidden');
+    state.editingTitle = false;
+  }
+  async function saveTitleEdit() {
+    if (!state.editingTitle) return;
+    const input = $('#detailTitleInput'); const id = state.selectedTaskId;
+    const t = state.tasks.find(x => x.id === id); if (!t) return;
+    const value = input.value.trim();
+    if (!value || value === t.title) { cancelTitleEdit(); return; }
+    const updated = await api(`/api/tasks/${id}/title`, { method: 'PUT', body: JSON.stringify({ title: value }) });
+    Object.assign(t, updated, { section: normalizeSection(updated.section) });
+    cancelTitleEdit();
+    renderTasks();
+    if (state.selectedTaskId === id) { $('#detailTitle').textContent = updated.title; }
+    showToast('Заголовок сохранён');
+  }
+
   // -------- Memory --------
   async function loadMemory() {
     const [dashboard,status,projects,agents]=await Promise.all([api('/api/memory/dashboard'),api('/api/memory/status'),api('/api/memory/projects'),api('/api/memory/agents')]);
@@ -140,7 +184,7 @@
     const m=state.dashboard.metrics; const kpis=[['Уроков',m.lessonsTotal],['Применений',m.appliedTotal],['Подтверждено',m.verifiedTotal],['Проблем',m.problemsTotal],['Скиллов',m.skillsTotal]];
     $('#kpiRow').innerHTML=kpis.map(([l,v])=>`<div class="kpi"><div class="kpi-label">${l}</div><div class="kpi-value">${v}</div></div>`).join('');
     const top=[...state.dashboard.lessons].sort((a,b)=>b.appliedCount-a.appliedCount).slice(0,5); const max=Math.max(1,...top.map(x=>x.appliedCount));
-    const box=$('#topLessons'); box.replaceChildren(); top.forEach(l=>{const b=document.createElement('button');b.type='button';b.className='rank-row';b.dataset.lessonOpen=l.id;b.innerHTML=`<div class="rank-head"><span class="rank-title">${escapeHtml(l.title)}</span><span class="rank-stats">${l.appliedCount} · ✓${l.verifiedCount}</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(l.appliedCount/max*100)}%"></div></div>`;box.append(b);});
+    const box=$('#topLessons'); box.replaceChildren(); top.forEach(l=>{const b=document.createElement('button');b.type='button';b.className='rank-row';b.dataset.lessonOpen=l.id;b.innerHTML=`<div class="rank-head"><span class="rank-title">${escapeHtml(l.title)}</span><span class="rank-stats">${l.appliedCount} · ${l.verifiedCount} подтверждено</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(l.appliedCount/max*100)}%"></div></div>`;box.append(b);});
     renderSecondary();
   }
 
@@ -152,7 +196,7 @@
   }
 
   async function searchLessons(){const p=new URLSearchParams();const q=$('#lessonSearch').value.trim(),project=$('#lessonProject').value,agent=$('#lessonAgent').value;if(q)p.set('q',q);if(project)p.set('project',project);if(agent)p.set('agent',agent);const lessons=await api('/api/memory/lessons?'+p.toString());const box=$('#lessonList');box.replaceChildren();lessons.forEach(l=>box.append(createLessonRow(l)));$('#lessonEmpty').classList.toggle('hidden',lessons.length>0);}
-  function createLessonRow(l){const b=document.createElement('button');b.type='button';b.className='lesson-row';b.dataset.lessonOpen=l.id;b.innerHTML=`<div class="min-w-0"><div class="lesson-title">${escapeHtml(l.title)}</div><div class="lesson-mobile-meta">${escapeHtml(l.project)} · ${escapeHtml(l.agent)} · ${escapeHtml(l.scope)}</div></div><div class="lesson-meta"><div>${escapeHtml(l.project)}</div><div>${escapeHtml(l.agent)} · ${escapeHtml(l.scope)}</div></div><div class="lesson-stats">${l.appliedCount} примен.<br>✓ ${l.verifiedCount}</div>`;return b;}
+  function createLessonRow(l){const b=document.createElement('button');b.type='button';b.className='lesson-row';b.dataset.lessonOpen=l.id;b.innerHTML=`<div class="min-w-0"><div class="lesson-title">${escapeHtml(l.title)}</div><div class="lesson-mobile-meta">${escapeHtml(l.project)} · ${escapeHtml(l.agent)} · ${escapeHtml(l.scope)}</div></div><div class="lesson-meta"><div>${escapeHtml(l.project)}</div><div>${escapeHtml(l.agent)} · ${escapeHtml(l.scope)}</div></div><div class="lesson-stats">${l.appliedCount} примен.<br>✓ ${l.verifiedCount} подтверждено</div>`;return b;}
 
   async function searchProblems(){const p=new URLSearchParams();const q=$('#problemSearch').value.trim(),project=$('#problemProject').value;if(q)p.set('q',q);if(project)p.set('project',project);const items=await api('/api/memory/problems?'+p.toString());const box=$('#problemList');box.replaceChildren();items.forEach(p=>{const b=document.createElement('button');b.type='button';b.className='problem-row';b.innerHTML=`<div class="row-main"><div class="row-title">${escapeHtml(p.title)}</div><div class="row-sub">${escapeHtml(p.summary)}</div><div class="row-extra">${escapeHtml(p.project)} · ${p.solutionCount} решений</div></div><div class="row-side">${p.appliedCount} примен.<br>✓ ${p.verifiedCount}</div>`;box.append(b);});$('#problemEmpty').classList.toggle('hidden',items.length>0);}
 
@@ -166,6 +210,16 @@
   function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));}
   function debounce(fn,delay=220){let timer;return(...args)=>{clearTimeout(timer);timer=setTimeout(()=>fn(...args),delay);};}
 
+  // -------- Кнопки «Свернуть все» / «Развернуть все»: шевроны вместо текста --------
+  (function () {
+    [['collapseAll', 'Свернуть все', '› ‹'], ['expandAll', 'Развернуть все', '‹ ›']].forEach(([id, label, glyphs]) => {
+      const b = $(`#${id}`); if (!b) return;
+      if (!b.title) b.title = label;
+      if (!b.getAttribute('aria-label')) b.setAttribute('aria-label', label);
+      b.replaceChildren(glyphs);
+    });
+  })();
+
   // -------- Events --------
   $$('[data-main]').forEach(b=>b.addEventListener('click',()=>setMain(b.dataset.main)));
   $('#backlogTab').addEventListener('click',()=>{state.taskTab='backlog';state.taskFilter='all';closeTaskDetail();renderTasks();});
@@ -175,6 +229,7 @@
   $('#expandAll').addEventListener('click',()=>{state.tasks.filter(taskVisible).forEach(t=>state.expanded[state.taskTab].add(normalizeSection(t.section)));renderTasks();});
   $('#backButton').addEventListener('click', closeTaskDetail);
     $('#detailDescription').addEventListener('click', beginDescriptionEdit);
+    $('#detailTitle').addEventListener('click', beginTitleEdit);
   $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();if(!text)return;const orig=btn.textContent;const dots=['.','..','...'];let i=0;btn.disabled=true;btn.classList.add('sending');btn.textContent=dots[0];const timer=setInterval(()=>{i=(i+1)%dots.length;btn.textContent=dots[i];},375);try{const item=await api('/api/tasks',{method:'POST',body:JSON.stringify({text})});state.tasks.unshift({...item,section:normalizeSection(item.section)});$('#taskInput').value='';renderTasks();}catch(err){showToast(err.message);}finally{clearInterval(timer);btn.disabled=false;btn.classList.remove('sending');btn.textContent=orig;}});
 
   $$('.memory-tab').forEach(b=>b.addEventListener('click',()=>setMemoryTab(b.dataset.memoryTab)));
