@@ -11,6 +11,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
 });
 builder.Services.AddSingleton<TaskStore>();
+builder.Services.AddSingleton<IMemoryRepository, MockMemoryRepository>();
 builder.Services.AddSingleton<ITaskAgent>(_ => new LlmTaskAgent(
     providers: [
         new OllamaClient(),
@@ -80,6 +81,19 @@ app.MapPut("/api/tasks/{id:guid}/advance", async (Guid id, TaskStore store) =>
     var updated = await store.UpdateAsync(id, task => task with { Status = next });
     return Results.Ok(updated);
 });
+
+// ---------------- Agent memory (mock repository, API-shaped) ----------------
+app.MapGet("/api/memory/dashboard", (IMemoryRepository memory) => Results.Ok(memory.GetDashboard()));
+app.MapGet("/api/memory/status", (IMemoryRepository memory) => Results.Ok(memory.GetStatus()));
+app.MapGet("/api/memory/projects", (IMemoryRepository memory) => Results.Ok(memory.GetProjects()));
+app.MapGet("/api/memory/agents", (IMemoryRepository memory) => Results.Ok(memory.GetAgents()));
+
+app.MapGet("/api/memory/lessons", (string? q, string? project, string? agent, IMemoryRepository memory) =>
+    Results.Ok(memory.SearchLessons(q, project, agent)));
+app.MapGet("/api/memory/problems", (string? q, string? project, IMemoryRepository memory) =>
+    Results.Ok(memory.SearchProblems(q, project)));
+app.MapGet("/api/memory/skills", (string? q, IMemoryRepository memory) =>
+    Results.Ok(memory.SearchSkills(q)));
 
 app.MapFallbackToFile("index.html");
 app.Run();
@@ -351,8 +365,8 @@ sealed class LocalTaskAgent : ITaskAgent
         var lower = text.ToLowerInvariant();
         var hints = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Личный дашборд"] = ["дашборд", "dashboard", "интерфейс задач", "личное приложение"],
-            ["Lost Cyber Hamster"] = ["hamster", "хомяк", "lost cyber", "lch", "париж", "барселон", "квест", "energy bar", "прыж"],
+            ["Личный дашборд"] = ["дашборд", "dashboard", "памят", "интерфейс", "личное приложение"],
+            ["Lost Cyber Hamster"] = ["hamster", "хомяк", "lost cyber", "lch", "unity", "париж", "барселон", "квест", "energy bar", "прыж"],
             ["Workflow"] = ["workflow", "агент", "инструкц", "prompt", "промпт", "оркестратор", "hindsight", "graphify"]
         };
 
@@ -398,6 +412,139 @@ static class TaskPrompt
 
 // Точка сборки для интеграционных тестов (WebApplicationFactory)
 public partial class Program { }
+
+// Mock repository. Later replace only this implementation with the real agent-memory client/repository.
+interface IMemoryRepository
+{
+    object GetDashboard();
+    object GetStatus();
+    IReadOnlyList<string> GetProjects();
+    IReadOnlyList<string> GetAgents();
+    IEnumerable<MemoryLesson> SearchLessons(string? q, string? project, string? agent);
+    IEnumerable<MemoryProblem> SearchProblems(string? q, string? project);
+    IEnumerable<MemorySkill> SearchSkills(string? q);
+}
+
+record MemoryLesson(int Id, string Title, string Method, string Problem, string Conditions, string Cause,
+    string WorkingMethod, string Evidence, string Verification, string Scope, string ProjectId, string Project,
+    string Status, string Agent, string Computer, DateTimeOffset OccurredAt, int AppliedCount, int VerifiedCount);
+record MemoryProblem(int Id, string Title, string Summary, string Scope, string ProjectId, string Project,
+    int SolutionCount, int AppliedCount, int VerifiedCount, DateTimeOffset LastChange);
+record MemorySkill(int Id, string Name, string Description, string Scope, string ProjectId, string Project,
+    string Status, string Source, string Computer, string Version, int VersionCount, string[] Dependencies,
+    string VerifiedExample, DateTimeOffset RegisteredAt, DateTimeOffset UpdatedAt);
+record SkillEvent(string Kind, string Name, string Method, string Verification, string Agent, string Computer, DateTimeOffset OccurredAt, string ProjectId);
+
+sealed class MockMemoryRepository : IMemoryRepository
+{
+    private readonly List<MemoryLesson> _lessons =
+    [
+        new(1,"Диагностика collision window","bounds-overlap","Нестабильное определение столкновения на границах препятствий.","Unity 2D; BoxCollider2D рядом с краем препятствия.","Слишком большое окно допуска давало ложное столкновение.","Использовать фактический bounds overlap с уменьшенным tolerance и учитывать линию.","Проблемный сценарий перестал воспроизводиться после уменьшения допуска.","Повторный плейтест подтвердил корректное поведение.","project","lost-cyber-hamster-2025","Lost Cyber Hamster","active","Codex","Acer Nitro 16",DateTimeOffset.Now.AddDays(-3),12,9),
+        new(2,"Graphify перед структурной правкой","graphify-first","Агент может изменить код, не заметив связанные компоненты.","Структурные изменения нескольких классов или подсистем.","Связи кода не всегда очевидны из одного файла.","Перед правкой проверить graphify-out и затем сверить реальные исходники.","Несколько правок были скорректированы до изменения кода после обнаружения зависимостей.","Validation прошёл без регрессий.","global","*","Общий опыт","active","Codex","Acer Nitro 16",DateTimeOffset.Now.AddDays(-5),9,8),
+        new(3,"Root-cause после повторной ошибки","root-cause-mode","Агент повторяет похожее исправление после первой неудачи.","Предыдущая попытка не решила проблему.","Недостаток нового evidence перед следующей гипотезой.","После повторной ошибки переключаться в root-cause mode и требовать новый факт.","Корневая причина выявлялась быстрее и не повторялись одинаковые правки.","Результат подтверждался отдельной проверкой.","global","*","Общий опыт","active","Hermes","PC-2",DateTimeOffset.Now.AddDays(-6),7,5),
+        new(4,"Hindsight recall перед изменением","memory-recall","Накопленный опыт не используется перед новой похожей задачей.","Перед существенной работой по знакомой области.","Работа начинается без извлечения релевантного опыта.","Выполнять релевантный recall перед существенной работой.","Повторно использовались уже проверенные методы.","Метод применялся в нескольких задачах.","global","*","Общий опыт","active","Hermes","PC-2",DateTimeOffset.Now.AddDays(-8),5,4),
+        new(5,"UI Toolkit: защита от сквозного клика","ui-event-guard","Клик по закрывающейся модалке проходит в нижележащий экран.","Unity UI Toolkit; смена экранов в рамках pointer event.","Событие продолжает распространяться после изменения UI.","Останавливать propagation и разводить переключение экранов по безопасному жизненному циклу.","Сквозной переход перестал воспроизводиться.","Проверено на Win modal.","project","lost-cyber-hamster-2025","Lost Cyber Hamster","active","Copilot","Acer Nitro 16",DateTimeOffset.Now.AddDays(-1),4,4),
+        new(6,"Идемпотентная запись опыта","idempotent-memory-write","Одинаковый урок может создаваться несколько раз при retry.","Общая память агентов на нескольких машинах.","Повторная доставка не имеет стабильного idempotency key.","Формировать стабильный ключ по событию и проверять существующую запись перед insert.","Повторные доставки не создают дубли.","Проверено на тестовом retry очереди.","project","agent-memory-system","Общая память агентов","active","Codex","Acer Nitro 16",DateTimeOffset.Now.AddHours(-12),6,6)
+    ];
+
+    private readonly List<MemoryProblem> _problems =
+    [
+        new(1,"Нестабильные collision-проверки Unity","Ложные столкновения на краях препятствий.","project","lost-cyber-hamster-2025","Lost Cyber Hamster",3,17,12,DateTimeOffset.Now.AddDays(-1)),
+        new(2,"Повторение нерабочих агентских правок","Следующая попытка повторяет гипотезу без нового evidence.","global","*","Общий опыт",2,9,7,DateTimeOffset.Now.AddDays(-2)),
+        new(3,"Сквозные клики UI Toolkit","Pointer event срабатывает на следующем экране после закрытия модалки.","project","lost-cyber-hamster-2025","Lost Cyber Hamster",2,6,5,DateTimeOffset.Now.AddDays(-1)),
+        new(4,"Дублирование опыта между машинами","Одинаковый урок может сохраняться несколькими агентами.","project","agent-memory-system","Общая память агентов",3,8,6,DateTimeOffset.Now.AddHours(-10))
+    ];
+
+    private readonly List<MemorySkill> _skills =
+    [
+        new(1,"graphify-use","Чтение графа связей перед структурными изменениями.","global","*","Общий опыт","active","skills/graphify-use","Acer Nitro 16","v3",3,[],"Использован перед рефакторингом bot strategies.",DateTimeOffset.Now.AddMonths(-1),DateTimeOffset.Now.AddDays(-2)),
+        new(2,"unity-validation","Проверка Unity-изменений принятой validation-последовательностью.","project","lost-cyber-hamster-2025","Lost Cyber Hamster","active","skills/unity-validation","Acer Nitro 16","v5",5,[],"Validation после исправления double jump.",DateTimeOffset.Now.AddMonths(-2),DateTimeOffset.Now.AddDays(-1)),
+        new(3,"memory-recall","Извлечение релевантного опыта перед существенной работой.","global","*","Общий опыт","active","skills/memory-recall","PC-2","v4",4,[],"Recall перед изменением agent pipeline.",DateTimeOffset.Now.AddMonths(-1),DateTimeOffset.Now.AddHours(-12)),
+        new(4,"legacy-memory-sync","Старый механизм синхронизации общей памяти.","global","*","Общий опыт","obsolete","skills/legacy-memory-sync","PC-2","v1",1,[],"Устаревший пример.",DateTimeOffset.Now.AddMonths(-4),DateTimeOffset.Now.AddMonths(-1))
+    ];
+
+    private readonly List<SkillEvent> _events =
+    [
+        new("skill_used","graphify-use","Проверен граф связей","Validation успешен","Codex","Acer Nitro 16",DateTimeOffset.Now.AddHours(-5),"lost-cyber-hamster-2025"),
+        new("skill_candidate","midnight-reset-check","Замечена повторяемая проверка reset","Кандидат","Hermes","PC-2",DateTimeOffset.Now.AddDays(-1),"lost-cyber-hamster-2025")
+    ];
+
+    public IReadOnlyList<string> GetProjects() => _lessons.Select(x => x.Project).Concat(_problems.Select(x => x.Project)).Distinct().Order().ToArray();
+    public IReadOnlyList<string> GetAgents() => _lessons.Select(x => x.Agent).Distinct().Order().ToArray();
+
+    public IEnumerable<MemoryLesson> SearchLessons(string? q, string? project, string? agent)
+    {
+        var query = _lessons.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(project)) query = query.Where(x => x.Project.Equals(project, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(agent)) query = query.Where(x => x.Agent.Equals(agent, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            // Mock lexical fallback. Replace with Hindsight/vector semantic search in the real repository.
+            var words = q.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            query = query.Where(x => words.Any(w => SearchText(x).Contains(w, StringComparison.OrdinalIgnoreCase)));
+        }
+        return query.OrderByDescending(x => x.OccurredAt);
+    }
+
+    public IEnumerable<MemoryProblem> SearchProblems(string? q, string? project)
+    {
+        var query = _problems.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(project)) query = query.Where(x => x.Project.Equals(project, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(q)) query = query.Where(x => (x.Title + " " + x.Summary).Contains(q, StringComparison.OrdinalIgnoreCase));
+        return query.OrderByDescending(x => x.LastChange);
+    }
+
+    public IEnumerable<MemorySkill> SearchSkills(string? q)
+    {
+        var query = _skills.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(q)) query = query.Where(x => (x.Name + " " + x.Description + " " + x.Project).Contains(q, StringComparison.OrdinalIgnoreCase));
+        return query.OrderBy(x => x.Status == "active" ? 0 : 1).ThenBy(x => x.Name);
+    }
+
+    public object GetDashboard()
+    {
+        var recentPrepares = new[]
+        {
+            new { agent="Codex", computer="Acer Nitro 16", occurredAt=DateTimeOffset.Now.AddMinutes(-20), projectId="lost-cyber-hamster-2025", task="Исправить double jump", foundRecords=3, warning=(string?)null },
+            new { agent="Hermes", computer="PC-2", occurredAt=DateTimeOffset.Now.AddHours(-2), projectId="agent-memory-system", task="Обновить skill sync", foundRecords=2, warning=(string?)null },
+            new { agent="Copilot", computer="Acer Nitro 16", occurredAt=DateTimeOffset.Now.AddHours(-5), projectId="lost-cyber-hamster-2025", task="UI Toolkit navigation", foundRecords=1, warning=(string?)null }
+        };
+
+        return new
+        {
+            generatedAt = DateTimeOffset.Now,
+            lessons = _lessons,
+            problems = _problems,
+            skills = _skills,
+            skillEvents = _events,
+            metrics = new
+            {
+                lessonsTotal = _lessons.Count,
+                appliedTotal = _lessons.Sum(x => x.AppliedCount),
+                verifiedTotal = _lessons.Sum(x => x.VerifiedCount),
+                problemsTotal = _problems.Count,
+                skillsTotal = _skills.Count,
+                byAgent = _lessons.GroupBy(x => x.Agent).ToDictionary(g => g.Key, g => new { lessons=g.Count(), applied=g.Sum(x=>x.AppliedCount), verified=g.Sum(x=>x.VerifiedCount) }),
+                byProject = _lessons.GroupBy(x => x.Project).ToDictionary(g => g.Key, g => new { lessons=g.Count(), applied=g.Sum(x=>x.AppliedCount), verified=g.Sum(x=>x.VerifiedCount) }),
+                recentPrepares,
+                note = "Моковые данные для фронтенда. Реальный репозиторий должен вернуть контракт Agent Memory API."
+            },
+            window = "Демо-окно данных"
+        };
+    }
+
+    public object GetStatus() => new
+    {
+        database = new { status = "healthy", requiresAttention = false },
+        hindsight = new { status = "healthy", requiresAttention = false },
+        worker = new { status = "idle", requiresAttention = false, hasLastError = false },
+        queue = new { queued = 2, processing = 0, completed = 41, failed = 0 },
+        jobs = new[] { new { id="lesson-delivery-482", status="completed" }, new { id="skills-sync-129", status="processing" } },
+        computers = new[] { new { name="Acer Nitro 16", status="online" }, new { name="PC-2", status="known" } }
+    };
+
+    private static string SearchText(MemoryLesson x) => string.Join(' ', x.Title, x.Method, x.Problem, x.Conditions, x.Cause, x.WorkingMethod, x.Evidence, x.Verification, x.Project, x.Agent);
+}
 
 sealed class TaskStore
 {

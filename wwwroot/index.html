@@ -11,69 +11,146 @@
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">MY DASH</div>
-      <button class="nav-item active" type="button"><span>✓</span> Задачи</button>
-      <button class="nav-item" type="button" disabled><span>◇</span> Память</button>
+      <button class="nav-item active" data-main="tasks" type="button"><span>✓</span> Задачи</button>
+      <button class="nav-item" data-main="memory" type="button"><span>◇</span> Память агентов</button>
     </aside>
 
     <main class="content">
-      <section id="listView">
-        <header class="page-head">
-          <div>
-            <div class="eyebrow">ЗАДАЧИ</div>
-            <h1 id="pageTitle">Backlog</h1>
+      <section id="tasksSection">
+        <section id="listView">
+          <header class="page-head">
+            <div><div class="eyebrow">ЗАДАЧИ</div><h1 id="pageTitle">Backlog</h1></div>
+            <div class="head-controls">
+              <div class="segmented">
+                <button id="backlogTab" class="segment active" type="button">Backlog</button>
+                <button id="todayTab" class="segment" type="button">Сегодня</button>
+              </div>
+              <div class="group-controls">
+                <button id="collapseAll" class="icon-button" type="button" title="Свернуть все" aria-label="Свернуть все">⌃</button>
+                <button id="expandAll" class="icon-button" type="button" title="Развернуть все" aria-label="Развернуть все">⌄</button>
+              </div>
+            </div>
+          </header>
+
+          <form id="addForm" class="add-form">
+            <input id="taskInput" type="text" placeholder="Опиши новую задачу…" autocomplete="off">
+            <button class="primary" type="submit">Добавить</button>
+          </form>
+
+          <div id="filters" class="filters hidden">
+            <button class="filter active" data-filter="all" type="button">Все</button>
+            <button class="filter" data-filter="new" type="button"><span class="legend-dot new"></span>Новые</button>
+            <button class="filter" data-filter="in_progress" type="button"><span class="legend-dot work"></span>В работе</button>
+            <button class="filter" data-filter="completed" type="button"><span class="legend-dot done"></span>Завершены</button>
           </div>
 
-          <div class="head-controls">
-            <div class="segmented" aria-label="Раздел задач">
-              <button id="backlogTab" class="segment active" type="button">Backlog</button>
-              <button id="todayTab" class="segment" type="button">Сегодня</button>
-            </div>
+          <div id="taskList" class="task-list"></div>
+          <div id="emptyState" class="empty hidden">Здесь пока нет задач.</div>
+        </section>
 
-            <div class="group-controls" aria-label="Управление разделами">
-              <button id="collapseAll" class="icon-button" type="button" title="Свернуть все" aria-label="Свернуть все разделы">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9l5 4 5-4M7 15l5-4 5 4"/></svg>
-              </button>
-              <button id="expandAll" class="icon-button" type="button" title="Развернуть все" aria-label="Развернуть все разделы">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5-4 5 4M7 14l5 4 5-4"/></svg>
-              </button>
-            </div>
+        <section id="detailView" class="detail hidden">
+          <button id="backButton" class="back-button" type="button">← Назад</button>
+          <div class="detail-inner">
+            <div id="detailSection" class="detail-section"></div>
+            <h1 id="detailTitle"></h1>
+            <div class="description-card"><div class="description-label">Описание</div><p id="detailDescription"></p></div>
+            <div id="detailActions" class="detail-actions"></div>
           </div>
-        </header>
-
-        <form id="addForm" class="add-form">
-          <input id="taskInput" maxlength="1200" autocomplete="off" placeholder="Опиши новую задачу…" aria-label="Описание новой задачи">
-          <button class="primary" type="submit">Добавить</button>
-        </form>
-
-        <div id="filters" class="filters hidden" aria-label="Фильтр статусов">
-          <button class="filter active" data-filter="all" type="button">Все</button>
-          <button class="filter" data-filter="new" type="button"><span class="legend-dot new"></span>Новые</button>
-          <button class="filter" data-filter="in_progress" type="button"><span class="legend-dot work"></span>В работе</button>
-          <button class="filter" data-filter="completed" type="button"><span class="legend-dot done"></span>Завершены</button>
-        </div>
-
-        <div id="taskList" class="task-list"></div>
-        <div id="emptyState" class="empty hidden">Здесь пока нет задач.</div>
+        </section>
       </section>
 
-      <section id="detailView" class="detail hidden">
-        <button id="backButton" class="back-button" type="button">← Назад</button>
-        <div class="detail-inner">
-          <div id="detailSection" class="detail-section"></div>
-          <h1 id="detailTitle"></h1>
-          <div class="description-card">
-            <div class="description-label">Описание</div>
-            <p id="detailDescription"></p>
+      <section id="memorySection" class="hidden">
+        <div id="memoryMain">
+          <header class="memory-head">
+            <div><div class="eyebrow">ПАМЯТЬ АГЕНТОВ <span class="demo-badge">Демо</span></div><h1>Общая память</h1></div>
+          </header>
+
+          <div class="memory-tabs" role="tablist">
+            <button class="memory-tab active" data-memory-tab="overview" type="button">Применение памяти</button>
+            <button class="memory-tab" data-memory-tab="lessons" type="button">Уроки</button>
+            <button class="memory-tab" data-memory-tab="problems" type="button">Проблемы</button>
+            <button class="memory-tab" data-memory-tab="skills" type="button">Скиллы</button>
+            <button class="memory-tab" data-memory-tab="system" type="button">Система</button>
           </div>
-          <div id="detailActions" class="detail-actions"></div>
+
+          <section id="paneOverview" class="memory-pane">
+            <div id="kpiRow" class="kpi-row"></div>
+
+            <div class="panel useful-panel">
+              <div class="panel-title">Самый полезный опыт</div>
+              <div class="panel-subtitle">Рейтинг по числу применений; ✓ — подтверждённые результаты</div>
+              <div id="topLessons" class="rank-list"></div>
+            </div>
+
+            <div class="panel secondary-panel">
+              <div class="secondary-head">
+                <div class="panel-title">Дополнительный срез</div>
+                <div class="segmented small">
+                  <button class="secondary-tab active" data-secondary="agents" type="button">По агентам</button>
+                  <button class="secondary-tab" data-secondary="projects" type="button">По проектам</button>
+                  <button class="secondary-tab" data-secondary="recent" type="button">Последние</button>
+                </div>
+              </div>
+              <div id="secondaryContent"></div>
+            </div>
+          </section>
+
+          <section id="paneLessons" class="memory-pane hidden">
+            <div class="memory-filter-row lessons-filters">
+              <input id="lessonSearch" type="search" placeholder="Поиск по смыслу…">
+              <select id="lessonProject" aria-label="Проект"></select>
+              <select id="lessonAgent" aria-label="Агент"></select>
+            </div>
+            <div class="search-note">Поиск идёт через backend. В мок-репозитории используется локальный fallback; позже его можно заменить на Hindsight/vector search.</div>
+            <div id="lessonList" class="dense-list"></div>
+            <div id="lessonEmpty" class="empty hidden">Уроков по этому запросу не найдено.</div>
+          </section>
+
+          <section id="paneProblems" class="memory-pane hidden">
+            <div class="memory-filter-row problems-filters">
+              <input id="problemSearch" type="search" placeholder="Поиск по проблемам…">
+              <select id="problemProject" aria-label="Проект"></select>
+            </div>
+            <div id="problemList" class="dense-list"></div>
+            <div id="problemEmpty" class="empty hidden">Проблем по этому запросу не найдено.</div>
+          </section>
+
+          <section id="paneSkills" class="memory-pane hidden">
+            <div class="memory-filter-row skills-filters"><input id="skillSearch" type="search" placeholder="Поиск по скиллам…"></div>
+            <div id="skillList" class="dense-list"></div>
+            <div id="skillEmpty" class="empty hidden">Скиллов по этому запросу не найдено.</div>
+          </section>
+
+          <section id="paneSystem" class="memory-pane hidden">
+            <div id="systemCards" class="system-grid"></div>
+            <div class="two-col">
+              <div class="panel"><div class="panel-title">Последние задания</div><div id="systemJobs" class="simple-list"></div></div>
+              <div class="panel"><div class="panel-title">Компьютеры</div><div id="systemComputers" class="simple-list"></div></div>
+            </div>
+          </section>
         </div>
+
+        <section id="lessonDetail" class="detail hidden">
+          <button id="lessonBack" class="back-button" type="button">← Назад</button>
+          <div class="detail-inner wide">
+            <div class="lesson-detail-badges"><span id="lessonDetailProject" class="detail-section"></span><span id="lessonDetailScope" class="muted"></span></div>
+            <h1 id="lessonDetailTitle"></h1>
+            <div id="lessonDetailMeta" class="muted small-text"></div>
+            <div class="lesson-detail-grid">
+              <div class="description-card"><div class="description-label">Проблема</div><p id="lessonProblem"></p></div>
+              <div class="description-card"><div class="description-label">Условия</div><p id="lessonConditions"></p></div>
+              <div class="description-card"><div class="description-label">Причина</div><p id="lessonCause"></p></div>
+              <div class="description-card"><div class="description-label">Рабочий метод</div><p id="lessonMethod"></p></div>
+              <div class="description-card"><div class="description-label">Доказательство и проверка</div><p id="lessonEvidence"></p></div>
+            </div>
+          </div>
+        </section>
       </section>
     </main>
 
     <nav class="bottom-nav" aria-label="Главная навигация">
-      <button class="bottom-item active" type="button"><span>✓</span><small>Задачи</small></button>
-      <button class="bottom-item" type="button" disabled><span>◇</span><small>Память</small></button>
-      <button class="bottom-item" type="button" disabled><span>＋</span><small>Ещё</small></button>
+      <button class="bottom-item active" data-main="tasks" type="button"><span>✓</span><small>Задачи</small></button>
+      <button class="bottom-item" data-main="memory" type="button"><span>◇</span><small>Память</small></button>
     </nav>
   </div>
 
