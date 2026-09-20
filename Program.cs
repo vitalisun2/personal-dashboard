@@ -103,6 +103,21 @@ app.MapPut("/api/tasks/{id:guid}/title", async (Guid id, UpdateTitleRequest requ
     return updated is null ? Results.NotFound() : Results.Ok(updated);
 });
 
+// Переименование раздела: новое название применяется ко всем задачам этого раздела
+app.MapPut("/api/tasks/sections/rename", async (RenameSectionRequest request, TaskStore store) =>
+{
+    var oldName = request.OldName?.Trim();
+    var newName = request.NewName?.Trim();
+
+    if (string.IsNullOrWhiteSpace(oldName) || string.IsNullOrWhiteSpace(newName))
+        return Results.BadRequest(new { message = "Название раздела не может быть пустым." });
+    if (newName.Length > 40)
+        return Results.BadRequest(new { message = "Название раздела должно быть не длиннее 40 символов." });
+
+    var renamed = await store.RenameSectionAsync(oldName, newName);
+    return Results.Ok(new { renamed });
+});
+
 // ---------------- Agent memory (mock repository, API-shaped) ----------------
 app.MapGet("/api/memory/dashboard", async (IMemoryRepository memory) => Results.Ok(await memory.GetDashboard()));
 app.MapGet("/api/memory/status", async (IMemoryRepository memory) => Results.Ok(await memory.GetStatus()));
@@ -123,6 +138,7 @@ record CreateTaskRequest(string? Text);
 record UpdateDescriptionRequest(string? Description);
 record UpdateTitleRequest(string? Title);
 record MoveTaskRequest(TaskBucket Bucket);
+record RenameSectionRequest(string? OldName, string? NewName);
 record TaskDraft(string Title, string Description, string Section);
 record TaskItem(Guid Id, string Title, string Description, string Section, TaskBucket Bucket, TaskStatus Status, DateTimeOffset CreatedAt);
 
@@ -620,6 +636,33 @@ sealed class TaskStore
         {
             var items = (await ReadUnsafeAsync()).Where(x => x.Id != id).ToList();
             await WriteUnsafeAsync(items);
+        }
+        finally { _gate.Release(); }
+    }
+
+    // Переименование раздела во всех задачах. Сопоставление без учёта регистра;
+    // имя пишется с обрезкой. Возвращает число задач, чьё название фактически изменилось.
+    public async Task<int> RenameSectionAsync(string oldName, string newName)
+    {
+        oldName = oldName.Trim();
+        newName = newName.Trim();
+        if (oldName.Length == 0 || newName.Length == 0) return 0;
+
+        await _gate.WaitAsync();
+        try
+        {
+            var items = await ReadUnsafeAsync();
+            var changed = 0;
+            for (var i = 0; i < items.Count; i++)
+            {
+                var current = items[i].Section;
+                if (!current.Equals(oldName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (current.Equals(newName, StringComparison.Ordinal)) continue;
+                items[i] = items[i] with { Section = newName };
+                changed++;
+            }
+            if (changed > 0) await WriteUnsafeAsync(items);
+            return changed;
         }
         finally { _gate.Release(); }
     }

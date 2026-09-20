@@ -196,6 +196,18 @@
     </nav>
   </div>
 
+  <dialog id="renameSectionModal" class="modal" aria-labelledby="renameSectionTitle">
+    <form id="renameSectionForm" class="modal-form">
+      <div class="modal-title" id="renameSectionTitle">Переименовать раздел</div>
+      <label class="modal-label" for="renameSectionInput">Новое название</label>
+      <input id="renameSectionInput" type="text" maxlength="40" placeholder="Название раздела" autocomplete="off">
+      <div class="modal-actions">
+        <button type="button" id="renameSectionCancel" class="modal-cancel">Отмена</button>
+        <button type="submit" class="primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   <script src="app.js"></script>
 </body>

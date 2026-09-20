@@ -1,6 +1,6 @@
 (() => {
   const state = {
-    main: 'tasks', tasks: [], taskTab: 'backlog', taskFilter: 'all', selectedTaskId: null,
+    main: 'tasks', tasks: [], taskTab: 'backlog', taskFilter: 'all', selectedTaskId: null, renamingSection: null,
     expanded: { backlog: new Set(), today: new Set() },
     dashboard: null, memoryStatus: null, memoryTab: 'overview', secondary: 'agents', selectedLesson: null, selectedProblem: null, selectedSkill: null, problems: [], skills: [],
     lessonSort: 'added', recentTab: 'reads'
@@ -169,6 +169,88 @@
     if (state.selectedTaskId === id) { $('#detailTitle').textContent = updated.title; }
     showToast('Заголовок сохранён');
   }
+
+  // -------- Переименование раздела: долгое нажатие на заголовок группы --------
+  const LONG_PRESS_MS = 500;
+  const LONG_PRESS_TOLERANCE = 10;
+  let pressTimer = null;
+  let pressStart = null;
+  let suppressNextClick = false;
+
+  function cancelSectionPress() {
+    if (pressTimer !== null) { clearTimeout(pressTimer); pressTimer = null; }
+    pressStart = null;
+  }
+
+  function openRenameModal(section) {
+    state.renamingSection = section;
+    const input = $('#renameSectionInput');
+    input.value = section;
+    $('#renameSectionModal').showModal();
+    input.focus();
+    input.select();
+  }
+
+  function closeRenameModal() {
+    const modal = $('#renameSectionModal');
+    if (modal.open) modal.close();
+    state.renamingSection = null;
+  }
+
+  async function saveRenameSection() {
+    const oldName = state.renamingSection;
+    if (!oldName) return;
+    const newName = $('#renameSectionInput').value.trim();
+    if (!newName) { showToast('Название не может быть пустым'); return; }
+    const result = await api('/api/tasks/sections/rename', { method: 'PUT', body: JSON.stringify({ oldName, newName }) });
+    if (result.renamed > 0) {
+      const lower = oldName.toLowerCase();
+      state.tasks.forEach(t => { if (normalizeSection(t.section).toLowerCase() === lower) t.section = newName; });
+      ['backlog', 'today'].forEach(tab => {
+        const set = state.expanded[tab];
+        if (set.has(oldName)) { set.delete(oldName); set.add(newName); }
+      });
+      renderTasks();
+      showToast('Раздел переименован');
+    }
+    closeRenameModal();
+  }
+
+  document.addEventListener('pointerdown', e => {
+    const g = e.target.closest('[data-task-group]');
+    if (!g || e.button !== 0) return;
+    pressStart = { x: e.clientX, y: e.clientY };
+    cancelSectionPress();
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      suppressNextClick = true;
+      openRenameModal(g.dataset.taskGroup);
+    }, LONG_PRESS_MS);
+  }, true);
+
+  document.addEventListener('pointermove', e => {
+    if (pressTimer && pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > LONG_PRESS_TOLERANCE)
+      cancelSectionPress();
+  }, { passive: true });
+
+  ['pointerup'].forEach(type => document.addEventListener(type, cancelSectionPress, true));
+  document.addEventListener('pointercancel', () => { cancelSectionPress(); suppressNextClick = false; }, true);
+
+  // Один клик сразу после long-press гасится, чтобы группа не схлопнулась под модалкой.
+  document.addEventListener('click', e => {
+    if (!suppressNextClick) return;
+    suppressNextClick = false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
+
+  $('#renameSectionForm').addEventListener('submit', e => {
+    e.preventDefault();
+    saveRenameSection().catch(err => showToast(err.message));
+  });
+  $('#renameSectionCancel').addEventListener('click', closeRenameModal);
+  $('#renameSectionModal').addEventListener('click', e => { if (e.target === $('#renameSectionModal')) closeRenameModal(); });
+  $('#renameSectionModal').addEventListener('close', () => { state.renamingSection = null; });
 
   // -------- Memory --------
   async function loadMemory() {
