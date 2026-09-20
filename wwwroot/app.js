@@ -218,9 +218,9 @@
 
   document.addEventListener('pointerdown', e => {
     const g = e.target.closest('[data-task-group]');
-    if (!g || e.button !== 0) return;
-    pressStart = { x: e.clientX, y: e.clientY };
+    if (!g || e.button > 1) return;
     cancelSectionPress();
+    pressStart = { x: e.clientX, y: e.clientY };
     pressTimer = setTimeout(() => {
       pressTimer = null;
       suppressNextClick = true;
