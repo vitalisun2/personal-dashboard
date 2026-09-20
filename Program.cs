@@ -14,8 +14,8 @@ builder.Services.AddSingleton<TaskStore>();
 builder.Services.AddSingleton<IMemoryRepository, MemoryRepository>();
 builder.Services.AddSingleton<ITaskAgent>(_ => new LlmTaskAgent(
     providers: [
-        new OllamaClient(),
         new OpenRouterClient(),
+        new OllamaClient(),
     ],
     fallback: new LocalTaskAgent()));
 
@@ -151,7 +151,7 @@ interface ITaskAgent
 }
 
 // ── LLM-агент с каскадом провайдеров ────────────────────────────────────────
-// Порядок: локальная Ollama → подписочный OpenRouter → эвристика.
+// Порядок: подписочный OpenRouter (DeepSeek) → локальная Ollama → эвристика.
 // Каждый провайдер сам решает, доступен ли он (таймауты, отсутствие ключа);
 // при сбое каскад уходит дальше, приложение всегда отвечает.
 
@@ -284,7 +284,7 @@ abstract class HttpLlmProvider : ILlmProvider
     }
 }
 
-// 1. Локальная Ollama (OpenAI-совместимый /v1/chat/completions, строгий JSON-грамматикой)
+// 2. Локальная Ollama (OpenAI-совместимый /v1/chat/completions, строгий JSON-грамматикой) — fallback
 sealed class OllamaClient : HttpLlmProvider
 {
     private const string DefaultUrl = "http://localhost:11434";
@@ -326,7 +326,7 @@ sealed class OllamaClient : HttpLlmProvider
     };
 }
 
-// 2. Подписочный OpenRouter (DeepSeek) — включается только при наличии ключа
+// 1. Подписочный OpenRouter (DeepSeek): основной разборщик, включается при наличии ключа
 sealed class OpenRouterClient : HttpLlmProvider
 {
     private const string DefaultUrl = "https://openrouter.ai/api/v1";
