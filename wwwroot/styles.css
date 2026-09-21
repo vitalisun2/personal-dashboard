@@ -24,3 +24,5 @@
 .detail-backbar{margin:-28px 0 6px;padding:28px 0 12px}.detail-backbar .back-button{margin:0}
 @media(max-width:720px){.task-screen-toolbar{margin-top:-16px;padding-top:16px}.detail-backbar{margin-top:-16px;padding-top:16px}}
 @media(max-width:520px){.task-draft-modal{width:calc(100vw - 24px)}.draft-actions{display:grid;grid-template-columns:1fr 1fr}.draft-actions #taskDraftRevise{margin-left:0}.draft-actions .primary{grid-column:1/-1}}
+.today-task-context-menu{background:color-mix(in srgb,var(--card) 84%,#fff 16%)}
+.section-context-menu{background:color-mix(in srgb,var(--card) 84%,#fff 16%)}
