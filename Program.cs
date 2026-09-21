@@ -695,7 +695,9 @@ sealed class MockMemoryRepository : IMemoryRepository
 
 sealed class TaskStore
 {
+    private const int ArchiveRetentionDays = 30;
     private readonly string _path;
+    private readonly bool _protectionEnabled;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web)
     {
@@ -709,12 +711,23 @@ sealed class TaskStore
         _path = string.IsNullOrWhiteSpace(configured)
             ? Path.Combine(environment.ContentRootPath, "tasks.json")
             : configured;
+        _protectionEnabled = string.Equals(
+            Environment.GetEnvironmentVariable("TASKS_PROTECTION_ENABLED"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
     }
 
     // Test seam: explicit file path instead of the TASKS_FILE env var / server environment.
     public TaskStore(string path)
     {
         _path = path;
+    }
+
+    // Test seam for production-like recovery and archiving behavior.
+    internal TaskStore(string path, bool protectionEnabled)
+    {
+        _path = path;
+        _protectionEnabled = protectionEnabled;
     }
 
     public async Task<IReadOnlyList<TaskItem>> GetAllAsync()
@@ -856,7 +869,17 @@ sealed class TaskStore
 
     private async Task<List<TaskItem>> ReadUnsafeAsync()
     {
-        if (!File.Exists(_path)) return [];
+        if (!File.Exists(_path))
+        {
+            if (!_protectionEnabled) return [];
+
+            var backup = BackupPath();
+            if (!File.Exists(backup))
+                throw new InvalidOperationException($"Task data file is missing: {_path}. Restore it from archive or {backup}.");
+
+            File.Copy(backup, _path, overwrite: false);
+        }
+
         await using var stream = File.OpenRead(_path);
         var items = await JsonSerializer.DeserializeAsync<List<TaskItem>>(stream, _json) ?? [];
         return items
@@ -869,6 +892,38 @@ sealed class TaskStore
         var temp = _path + ".tmp";
         await using (var stream = File.Create(temp))
             await JsonSerializer.SerializeAsync(stream, items, _json);
-        File.Move(temp, _path, true);
+
+        if (_protectionEnabled && File.Exists(_path))
+            File.Replace(temp, _path, BackupPath(), ignoreMetadataErrors: true);
+        else
+            File.Move(temp, _path, true);
+
+        if (_protectionEnabled)
+            await ArchiveCurrentAsync();
+    }
+
+    private string BackupPath() => _path + ".bak";
+
+    private async Task ArchiveCurrentAsync()
+    {
+        var dataDirectory = Path.GetDirectoryName(_path)
+            ?? throw new InvalidOperationException($"Task data path has no directory: {_path}");
+        var archiveDirectory = Path.Combine(dataDirectory, "archive");
+        var snapshotDirectory = Path.Combine(archiveDirectory, DateTime.Now.ToString("yyyy-MM-dd"));
+        Directory.CreateDirectory(snapshotDirectory);
+
+        var snapshot = Path.Combine(snapshotDirectory, Path.GetFileName(_path));
+        await using var source = File.OpenRead(_path);
+        await using var destination = File.Create(snapshot);
+        await source.CopyToAsync(destination);
+
+        var datedDirectories = Directory.EnumerateDirectories(archiveDirectory)
+            .Select(path => new { Path = path, Name = Path.GetFileName(path) })
+            .Where(x => DateOnly.TryParseExact(x.Name, "yyyy-MM-dd", out _))
+            .OrderByDescending(x => x.Name, StringComparer.Ordinal)
+            .Skip(ArchiveRetentionDays);
+
+        foreach (var directory in datedDirectories)
+            Directory.Delete(directory.Path, recursive: true);
     }
 }

@@ -1,19 +1,20 @@
-# Деплой Personal Dashboard (Windows / PowerShell на хосте 4060)
+﻿# Деплой Personal Dashboard (Windows / PowerShell на хосте 4060)
 # Запуск: powershell -ExecutionPolicy Bypass -File deploy.ps1
 $ErrorActionPreference = 'Stop'
 
-$dir = 'C:\Personal\personal-dashboard'
-
-if (-not (Test-Path (Join-Path $dir '.git'))) {
-    git clone https://github.com/vitalisun2/personal-dashboard.git $dir
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host 'Клон не удался. Если репозиторий приватный — сначала: gh auth login (или задай PAT в git credential).' -ForegroundColor Yellow
-        exit 1
-    }
-}
+$dir = $PSScriptRoot
+$dataDir = 'C:\Main\crystal_wave\Data\personal-dashboard'
+$dataFile = Join-Path $dataDir 'tasks.json'
 
 Set-Location $dir
 git pull --ff-only
+
+if (-not (Test-Path -LiteralPath $dataFile -PathType Leaf)) {
+    throw "Не найден файл данных: $dataFile. Восстанови tasks.json из archive или tasks.json.bak, затем запусти деплой снова."
+}
+
+# Docker Compose получает абсолютный путь только на этот запуск.
+$env:DASHBOARD_DATA_DIR = $dataDir.Replace('\', '/')
 
 if (-not (Test-Path (Join-Path $dir '.env'))) {
     Copy-Item .env.example .env
@@ -25,4 +26,5 @@ docker compose up -d --build
 
 Write-Host ''
 Write-Host 'Готово. Проверка: http://localhost:8080' -ForegroundColor Green
+Write-Host "Данные: $dataFile" -ForegroundColor Green
 Write-Host 'Логи: docker compose -f ' (Join-Path $dir 'docker-compose.yml') ' logs -f --tail 50' -ForegroundColor Green

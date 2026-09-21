@@ -10,6 +10,8 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       TASKS_FILE: /data/tasks.json
+      # Не даёт приложению принять пропавший production-файл за пустой список задач.
+      TASKS_PROTECTION_ENABLED: "true"
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct-2507-q4_K_M}
       OPENROUTER_URL: ${OPENROUTER_URL:-https://openrouter.ai/api/v1}
@@ -19,5 +21,5 @@ services:
       MEMORY_GATEWAY_URL: "${MEMORY_GATEWAY_URL:-http://host.docker.internal:8766}"
       MEMORY_API_KEY: "${MEMORY_API_KEY:-}"
     volumes:
-      # задачи переживают пересоздание контейнера
-      - ./data:/data
+      # Каталог данных не зависит от расположения клона репозитория.
+      - ${DASHBOARD_DATA_DIR:-C:/Main/crystal_wave/Data/personal-dashboard}:/data
