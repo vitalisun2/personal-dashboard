@@ -580,6 +580,9 @@
   document.addEventListener('pointerup', cancelTodayTaskPress, true);
   document.addEventListener('pointercancel', () => { cancelTodayTaskPress(); suppressTodayTaskClick=false; }, true);
   document.addEventListener('contextmenu', e => { if (e.target.closest('[data-today-task-row]')) e.preventDefault(); });
+  document.addEventListener('pointerdown', e => {
+    if (!e.target.closest('#todayTaskMenu')) dismissTodayTaskMenu();
+  }, true);
   document.addEventListener('selectstart', e => {
     if (e.target.closest('[data-today-task-row]')) e.preventDefault();
   }, true);
