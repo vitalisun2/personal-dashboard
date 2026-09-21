@@ -368,7 +368,16 @@
     document.querySelector('.group-toggle[aria-expanded="true"]')?.setAttribute('aria-expanded', 'false');
   }
 
-  function openSectionMenu(toggle) {
+  function positionContextMenu(menu, clientX, clientY) {
+    const rect = menu.getBoundingClientRect(); const margin = 8;
+    const left = Math.max(margin, Math.min(clientX, window.innerWidth - rect.width - margin));
+    const above = clientY - rect.height - margin;
+    const top = above >= margin ? above : Math.min(clientY + margin, window.innerHeight - rect.height - margin);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${Math.max(margin, top)}px`;
+  }
+
+  function openSectionMenu(toggle, clientX, clientY) {
     closeSectionMenu();
     const menu = document.createElement('div');
     menu.className = 'section-context-menu';
@@ -379,7 +388,8 @@
     rename.dataset.sectionRename = toggle.dataset.taskGroup;
     rename.textContent = 'Переименовать';
     menu.append(rename);
-    toggle.closest('.group-header')?.append(menu);
+    document.body.append(menu);
+    positionContextMenu(menu, clientX, clientY);
     toggle.setAttribute('aria-expanded', 'true');
   }
 
@@ -493,7 +503,7 @@
     pressTimer = setTimeout(() => {
       pressTimer = null;
       suppressNextClick = true;
-      openSectionMenu(g);
+      openSectionMenu(g, pressStart.x, pressStart.y);
     }, LONG_PRESS_MS);
   }, true);
 
@@ -546,9 +556,7 @@
     const menu=document.createElement('div'); menu.id='todayTaskMenu'; menu.className='today-task-context-menu'; menu.setAttribute('role','menu');
     const action=document.createElement('button'); action.type='button'; action.className='today-task-context-action'; action.dataset.todayTaskBacklog=taskId; action.setAttribute('role','menuitem'); action.textContent='← Backlog';
     menu.append(action); document.body.append(menu);
-    const rect=menu.getBoundingClientRect(); const margin=8;
-    menu.style.left=`${Math.max(margin,Math.min(clientX,window.innerWidth-rect.width-margin))}px`;
-    menu.style.top=`${Math.max(margin,Math.min(clientY,window.innerHeight-rect.height-margin))}px`;
+    positionContextMenu(menu, clientX, clientY);
     action.focus({preventScroll:true});
   }
 
@@ -572,6 +580,9 @@
   document.addEventListener('pointerup', cancelTodayTaskPress, true);
   document.addEventListener('pointercancel', () => { cancelTodayTaskPress(); suppressTodayTaskClick=false; }, true);
   document.addEventListener('contextmenu', e => { if (e.target.closest('[data-today-task-row]')) e.preventDefault(); });
+  document.addEventListener('selectstart', e => {
+    if (e.target.closest('[data-today-task-row]')) e.preventDefault();
+  }, true);
   document.addEventListener('click', e => {
     if (suppressTodayTaskClick) {
       suppressTodayTaskClick=false;
