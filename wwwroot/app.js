@@ -206,12 +206,13 @@
 
   function createTaskRow(task) {
     const row = document.createElement('article'); row.className = 'task-row' + (task.bucket === 'today' ? ' today' : ''); row.dataset.taskRow=task.id;
+    if (task.bucket === 'today') row.dataset.todayTaskRow=task.id;
     row.append(createDragHandle('task', task.id, 'Перетащить задачу'));
     const open = document.createElement('button'); open.type='button'; open.className='task-open'; open.dataset.taskOpen=task.id;
     if (task.bucket === 'today') { const dot=document.createElement('span'); dot.className=`status-dot ${statusDotClass(task.status)}`; open.append(dot); }
     const title=document.createElement('span'); title.className='task-title'; title.textContent=task.title; open.append(title);
-    const move=document.createElement('button'); move.type='button'; move.className='move-button'; move.dataset.taskMove=task.id; move.textContent=task.bucket==='backlog'?'→':'←';
-    row.append(open, move);
+    row.append(open);
+    if (task.bucket === 'backlog') { const move=document.createElement('button'); move.type='button'; move.className='move-button'; move.dataset.taskMove=task.id; move.textContent='→'; row.append(move); }
     if (task.bucket === 'today') { const b=document.createElement('button'); b.type='button'; b.className='status-button'; b.dataset.taskAdvance=task.id; b.textContent=statusLabel[task.status]; row.append(b); }
     return row;
   }
@@ -479,6 +480,63 @@
     e.stopImmediatePropagation();
   }, true);
 
+  // -------- Контекстное действие задачи «Сегодня» --------
+  // Долгое нажатие на саму строку не затрагивает long-press заголовков разделов.
+  let todayTaskPress = null;
+  let suppressTodayTaskClick = false;
+
+  function dismissTodayTaskMenu() {
+    $('#todayTaskMenu')?.remove();
+  }
+
+  function cancelTodayTaskPress() {
+    if (todayTaskPress?.timer != null) clearTimeout(todayTaskPress.timer);
+    todayTaskPress = null;
+  }
+
+  function openTodayTaskMenu(taskId, clientX, clientY) {
+    dismissTodayTaskMenu();
+    const menu=document.createElement('div'); menu.id='todayTaskMenu'; menu.className='today-task-context-menu'; menu.setAttribute('role','menu');
+    const action=document.createElement('button'); action.type='button'; action.className='today-task-context-action'; action.dataset.todayTaskBacklog=taskId; action.setAttribute('role','menuitem'); action.textContent='← Backlog';
+    menu.append(action); document.body.append(menu);
+    const rect=menu.getBoundingClientRect(); const margin=8;
+    menu.style.left=`${Math.max(margin,Math.min(clientX,window.innerWidth-rect.width-margin))}px`;
+    menu.style.top=`${Math.max(margin,Math.min(clientY,window.innerHeight-rect.height-margin))}px`;
+    action.focus({preventScroll:true});
+  }
+
+  document.addEventListener('pointerdown', e => {
+    const row=e.target.closest('[data-today-task-row]');
+    if (!row || e.button !== 0 || activeDrag || e.target.closest('[data-drag-kind],[data-task-advance]')) return;
+    dismissTodayTaskMenu();
+    const press={ x:e.clientX, y:e.clientY, taskId:row.dataset.todayTaskRow, timer:null };
+    press.timer=setTimeout(() => {
+      if (todayTaskPress !== press) return;
+      todayTaskPress=null;
+      suppressTodayTaskClick=true;
+      openTodayTaskMenu(press.taskId,press.x,press.y);
+    }, LONG_PRESS_MS);
+    todayTaskPress=press;
+  }, true);
+
+  document.addEventListener('pointermove', e => {
+    if (todayTaskPress && Math.hypot(e.clientX-todayTaskPress.x,e.clientY-todayTaskPress.y)>LONG_PRESS_TOLERANCE) cancelTodayTaskPress();
+  }, { passive:true });
+  document.addEventListener('pointerup', cancelTodayTaskPress, true);
+  document.addEventListener('pointercancel', () => { cancelTodayTaskPress(); suppressTodayTaskClick=false; }, true);
+  document.addEventListener('contextmenu', e => { if (e.target.closest('[data-today-task-row]')) e.preventDefault(); });
+  document.addEventListener('click', e => {
+    if (suppressTodayTaskClick) {
+      suppressTodayTaskClick=false;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (!e.target.closest('#todayTaskMenu')) dismissTodayTaskMenu();
+  }, true);
+  window.addEventListener('resize', dismissTodayTaskMenu);
+  document.addEventListener('scroll', dismissTodayTaskMenu, true);
+
   $('#renameSectionForm').addEventListener('submit', e => {
     e.preventDefault();
     saveRenameSection().catch(err => showToast(err.message));
@@ -603,6 +661,7 @@
   document.addEventListener('click',async e=>{
     try{
       if(e.target.closest('[data-drag-kind]'))return;
+      const back=e.target.closest('[data-today-task-backlog]');if(back){dismissTodayTaskMenu();await moveTask(back.dataset.todayTaskBacklog);return;}
       const g=e.target.closest('[data-task-group]');if(g){const set=state.expanded[state.taskTab];set.has(g.dataset.taskGroup)?set.delete(g.dataset.taskGroup):set.add(g.dataset.taskGroup);renderTasks();return;}
       const o=e.target.closest('[data-task-open]');if(o){const t=state.tasks.find(x=>x.id===o.dataset.taskOpen);if(t)navigate({main:'tasks',taskTab:t.bucket,filter:'all',taskId:t.id});return;}
       const m=e.target.closest('[data-task-move]');if(m){await moveTask(m.dataset.taskMove);return;}
