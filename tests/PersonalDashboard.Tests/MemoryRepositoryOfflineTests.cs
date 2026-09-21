@@ -14,6 +14,22 @@ public sealed class MemoryRepositoryOfflineTests
     private static MemoryRepository OfflineRepo() => new MemoryRepository("http://127.0.0.1:1", null);
 
     [TestMethod]
+    public void ReadApiKeyUsesSecretFileWhenEnvironmentValueIsMissing()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(path, "  file-secret\n");
+            Assert.AreEqual("file-secret", MemoryRepository.ReadApiKey(null, path));
+            Assert.AreEqual("environment-secret", MemoryRepository.ReadApiKey(" environment-secret ", path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [TestMethod]
     public async Task GetDashboardDegradesToEmptyContract()
     {
         var root = TestJson.RoundTrip(await OfflineRepo().GetDashboard());

@@ -19,7 +19,13 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # Общая память агентов: URL гейтвея (localhost внутри контейнера — свой; поэтому host.docker.internal)
       MEMORY_GATEWAY_URL: "${MEMORY_GATEWAY_URL:-http://host.docker.internal:8766}"
-      MEMORY_API_KEY: "${MEMORY_API_KEY:-}"
+      MEMORY_API_KEY_FILE: /run/secrets/agent-memory-api-key
     volumes:
       # Каталог данных не зависит от расположения клона репозитория.
       - ${DASHBOARD_DATA_DIR:-C:/Main/crystal_wave/Data/personal-dashboard}:/data
+    secrets:
+      - agent-memory-api-key
+
+secrets:
+  agent-memory-api-key:
+    file: ${CRYSTAL_WAVE_SECRETS_DIR:-C:/Main/crystal_wave/Secrets}/agent-memory-api-key

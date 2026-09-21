@@ -66,8 +66,9 @@ sealed class MemoryRepository : IMemoryRepository
     {
         var configured = Environment.GetEnvironmentVariable("MEMORY_GATEWAY_URL");
         _baseUrl = string.IsNullOrWhiteSpace(configured) ? "http://127.0.0.1:8766" : configured.TrimEnd('/');
-        var key = Environment.GetEnvironmentVariable("MEMORY_API_KEY");
-        _apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
+        _apiKey = ReadApiKey(
+            Environment.GetEnvironmentVariable("MEMORY_API_KEY"),
+            Environment.GetEnvironmentVariable("MEMORY_API_KEY_FILE"));
         _http = new HttpClient { Timeout = RequestTimeout };
     }
 
@@ -77,6 +78,19 @@ sealed class MemoryRepository : IMemoryRepository
         _baseUrl = baseUrl.TrimEnd('/');
         _apiKey = apiKey;
         _http = new HttpClient { Timeout = RequestTimeout };
+    }
+
+    internal static string? ReadApiKey(string? value, string? filePath)
+    {
+        if (!string.IsNullOrWhiteSpace(value)) return value.Trim();
+        if (string.IsNullOrWhiteSpace(filePath)) return null;
+        try
+        {
+            var fromFile = File.ReadAllText(filePath).Trim();
+            return string.IsNullOrWhiteSpace(fromFile) ? null : fromFile;
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
     }
 
     // -------- public API ---------
