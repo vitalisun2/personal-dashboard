@@ -335,7 +335,7 @@
   $('#todayTab').addEventListener('click',()=>{state.taskTab='today';state.taskFilter='all';closeTaskDetail();renderTasks();});
   $$('.filter').forEach(b=>b.addEventListener('click',()=>{state.taskFilter=b.dataset.filter;renderTasks();}));
   $('#collapseAll').addEventListener('click',()=>{state.expanded[state.taskTab].clear();renderTasks();});
-  $('#expandAll').addEventListener('click',()=>{state.tasks.filter(taskVisible).forEach(t=>state.expanded[state.taskTab].add(normalizeSection(t.section)));renderTasks();});
+  $('#expandAll').addEventListener('click',()=>{state.tasks.filter(t=>t.bucket===state.taskTab).forEach(t=>state.expanded[state.taskTab].add(normalizeSection(t.section)));renderTasks();});
   $('#backButton').addEventListener('click', closeTaskDetail);
     $('#detailDescription').addEventListener('click', beginDescriptionEdit);
     $('#detailTitle').addEventListener('click', beginTitleEdit);
