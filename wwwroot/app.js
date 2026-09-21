@@ -346,11 +346,41 @@
   const LONG_PRESS_TOLERANCE = 10;
   let pressTimer = null;
   let pressStart = null;
+  let pressPointerId = null;
+  let pressedSection = null;
   let suppressNextClick = false;
 
   function cancelSectionPress() {
     if (pressTimer !== null) { clearTimeout(pressTimer); pressTimer = null; }
     pressStart = null;
+    pressPointerId = null;
+    pressedSection = null;
+  }
+
+  function toggleSection(section) {
+    const set = state.expanded[state.taskTab];
+    set.has(section) ? set.delete(section) : set.add(section);
+    renderTasks();
+  }
+
+  function closeSectionMenu() {
+    document.querySelector('.section-context-menu')?.remove();
+    document.querySelector('.group-toggle[aria-expanded="true"]')?.setAttribute('aria-expanded', 'false');
+  }
+
+  function openSectionMenu(toggle) {
+    closeSectionMenu();
+    const menu = document.createElement('div');
+    menu.className = 'section-context-menu';
+    menu.setAttribute('role', 'menu');
+    const rename = document.createElement('button');
+    rename.type = 'button';
+    rename.setAttribute('role', 'menuitem');
+    rename.dataset.sectionRename = toggle.dataset.taskGroup;
+    rename.textContent = 'Переименовать';
+    menu.append(rename);
+    toggle.closest('.group-header')?.append(menu);
+    toggle.setAttribute('aria-expanded', 'true');
   }
 
   function openRenameModal(section) {
@@ -456,23 +486,40 @@
     const g = e.target.closest('[data-task-group]');
     if (!g || e.button > 1) return;
     cancelSectionPress();
+    if (e.pointerType !== 'mouse') e.preventDefault();
     pressStart = { x: e.clientX, y: e.clientY };
+    pressPointerId = e.pointerId;
+    pressedSection = g.dataset.taskGroup;
     pressTimer = setTimeout(() => {
       pressTimer = null;
       suppressNextClick = true;
-      openRenameModal(g.dataset.taskGroup);
+      openSectionMenu(g);
     }, LONG_PRESS_MS);
   }, true);
 
   document.addEventListener('pointermove', e => {
-    if (pressTimer && pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > LONG_PRESS_TOLERANCE)
+    if (pressTimer && pressPointerId === e.pointerId && pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > LONG_PRESS_TOLERANCE)
       cancelSectionPress();
   }, { passive: true });
 
-  ['pointerup'].forEach(type => document.addEventListener(type, cancelSectionPress, true));
+  document.addEventListener('pointerup', e => {
+    if (pressTimer && pressPointerId === e.pointerId && pressedSection) {
+      const section = pressedSection;
+      cancelSectionPress();
+      if (e.pointerType !== 'mouse') {
+        suppressNextClick = true;
+        toggleSection(section);
+        return;
+      }
+    }
+    cancelSectionPress();
+  }, true);
   document.addEventListener('pointercancel', () => { cancelSectionPress(); suppressNextClick = false; }, true);
+  document.addEventListener('contextmenu', e => {
+    if (e.target.closest('[data-task-group]')) e.preventDefault();
+  });
 
-  // Один клик сразу после long-press гасится, чтобы группа не схлопнулась под модалкой.
+  // Один клик сразу после long-press гасится, чтобы группа не схлопнулась под меню.
   document.addEventListener('click', e => {
     if (!suppressNextClick) return;
     suppressNextClick = false;
@@ -536,6 +583,17 @@
   }, true);
   window.addEventListener('resize', dismissTodayTaskMenu);
   document.addEventListener('scroll', dismissTodayTaskMenu, true);
+
+  document.addEventListener('pointerdown', e => {
+    if (!e.target.closest('.section-context-menu')) closeSectionMenu();
+  }, true);
+  document.addEventListener('click', e => {
+    const action = e.target.closest('[data-section-rename]');
+    if (!action) return;
+    e.preventDefault();
+    closeSectionMenu();
+    openRenameModal(action.dataset.sectionRename);
+  });
 
   $('#renameSectionForm').addEventListener('submit', e => {
     e.preventDefault();
@@ -662,7 +720,7 @@
     try{
       if(e.target.closest('[data-drag-kind]'))return;
       const back=e.target.closest('[data-today-task-backlog]');if(back){dismissTodayTaskMenu();await moveTask(back.dataset.todayTaskBacklog);return;}
-      const g=e.target.closest('[data-task-group]');if(g){const set=state.expanded[state.taskTab];set.has(g.dataset.taskGroup)?set.delete(g.dataset.taskGroup):set.add(g.dataset.taskGroup);renderTasks();return;}
+      const g=e.target.closest('[data-task-group]');if(g){closeSectionMenu();toggleSection(g.dataset.taskGroup);return;}
       const o=e.target.closest('[data-task-open]');if(o){const t=state.tasks.find(x=>x.id===o.dataset.taskOpen);if(t)navigate({main:'tasks',taskTab:t.bucket,filter:'all',taskId:t.id});return;}
       const m=e.target.closest('[data-task-move]');if(m){await moveTask(m.dataset.taskMove);return;}
       const a=e.target.closest('[data-task-advance]');if(a){await advanceTask(a.dataset.taskAdvance);return;}
