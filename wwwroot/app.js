@@ -369,10 +369,10 @@
   }
 
   function positionContextMenu(menu, clientX, clientY) {
-    const rect = menu.getBoundingClientRect(); const margin = 8;
+    const rect = menu.getBoundingClientRect(); const margin = 8; const verticalGap = 20;
     const left = Math.max(margin, Math.min(clientX, window.innerWidth - rect.width - margin));
-    const above = clientY - rect.height - margin;
-    const top = above >= margin ? above : Math.min(clientY + margin, window.innerHeight - rect.height - margin);
+    const above = clientY - rect.height - verticalGap;
+    const top = above >= margin ? above : Math.min(clientY + verticalGap, window.innerHeight - rect.height - margin);
     menu.style.left = `${left}px`;
     menu.style.top = `${Math.max(margin, top)}px`;
   }

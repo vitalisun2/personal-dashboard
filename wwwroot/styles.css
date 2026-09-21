@@ -27,3 +27,4 @@
 .today-task-context-menu{background:color-mix(in srgb,var(--card) 84%,#fff 16%)}
 .section-context-menu{background:color-mix(in srgb,var(--card) 84%,#fff 16%)}
 .section-context-menu{position:fixed;z-index:20;top:auto;left:auto}
+.task-row.today,.task-row.today *{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
