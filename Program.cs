@@ -52,6 +52,57 @@ app.MapPost("/api/tasks", async (CreateTaskRequest request, TaskStore store, ITa
     return Results.Created($"/api/tasks/{item.Id}", item);
 });
 
+// Черновик не попадает в список задач, пока пользователь не подтвердит результат.
+// Это позволяет безопасно уточнять формулировку сколько угодно раз.
+app.MapPost("/api/tasks/draft", async (CreateTaskDraftRequest request, TaskStore store, ITaskAgent agent) =>
+{
+    var text = request.Text?.Trim();
+    if (string.IsNullOrWhiteSpace(text))
+        return Results.BadRequest(new { message = "Описание задачи не может быть пустым." });
+
+    var sections = (await store.GetAllAsync())
+        .Select(x => string.IsNullOrWhiteSpace(x.Section) ? "Общее" : x.Section)
+        .Append("Общее")
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    return Results.Ok(await agent.CreateDraftAsync(text, sections));
+});
+
+app.MapPost("/api/tasks/draft/revise", async (ReviseTaskDraftRequest request, TaskStore store, ITaskAgent agent) =>
+{
+    var correction = request.Correction?.Trim();
+    if (!IsValidDraft(request.Draft))
+        return Results.BadRequest(new { message = "Черновик задачи неполный. Создайте его заново." });
+    if (string.IsNullOrWhiteSpace(correction))
+        return Results.BadRequest(new { message = "Опишите, что нужно изменить." });
+
+    var sections = (await store.GetAllAsync())
+        .Select(x => string.IsNullOrWhiteSpace(x.Section) ? "Общее" : x.Section)
+        .Append("Общее")
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    return Results.Ok(await agent.ReviseDraftAsync(request.Draft!, correction, sections));
+});
+
+app.MapPost("/api/tasks/confirm", async (ConfirmTaskDraftRequest request, TaskStore store) =>
+{
+    if (!IsValidDraft(request.Draft))
+        return Results.BadRequest(new { message = "Черновик задачи неполный. Создайте его заново." });
+
+    var draft = request.Draft! with
+    {
+        Title = request.Draft!.Title.Trim(),
+        Description = request.Draft.Description.Trim(),
+        Section = request.Draft.Section.Trim()
+    };
+    var item = new TaskItem(Guid.NewGuid(), draft.Title, draft.Description, draft.Section,
+        TaskBucket.Backlog, TaskStatus.New, DateTimeOffset.UtcNow);
+    await store.AddAsync(item);
+    return Results.Created($"/api/tasks/{item.Id}", item);
+});
+
 app.MapPut("/api/tasks/{id:guid}/bucket", async (Guid id, MoveTaskRequest request, TaskStore store) =>
 {
     var item = await store.UpdateAsync(id, task =>
@@ -118,6 +169,33 @@ app.MapPut("/api/tasks/sections/rename", async (RenameSectionRequest request, Ta
     return Results.Ok(new { renamed });
 });
 
+// Порядок задач внутри раздела. Передаётся полный набор видимых задач раздела,
+// чтобы сервер не мог случайно потерять задачу при устаревшем клиенте.
+app.MapPut("/api/tasks/reorder", async (ReorderTasksRequest request, TaskStore store) =>
+{
+    var section = request.Section?.Trim();
+    if (string.IsNullOrWhiteSpace(section) || request.TaskIds is null)
+        return Results.BadRequest(new { message = "Нужны раздел и полный порядок задач." });
+
+    var reordered = await store.ReorderTasksAsync(request.Bucket, section, request.TaskIds);
+    return reordered
+        ? Results.NoContent()
+        : Results.BadRequest(new { message = "Состав задач изменился. Обновите список и повторите попытку." });
+});
+
+// Порядок разделов в текущей вкладке. Порядок задач внутри каждого раздела
+// сохраняется, меняется только положение групп.
+app.MapPut("/api/tasks/sections/reorder", async (ReorderSectionsRequest request, TaskStore store) =>
+{
+    if (request.Sections is null)
+        return Results.BadRequest(new { message = "Нужен полный порядок разделов." });
+
+    var reordered = await store.ReorderSectionsAsync(request.Bucket, request.Sections);
+    return reordered
+        ? Results.NoContent()
+        : Results.BadRequest(new { message = "Состав разделов изменился. Обновите список и повторите попытку." });
+});
+
 // ---------------- Agent memory (mock repository, API-shaped) ----------------
 app.MapGet("/api/memory/dashboard", async (IMemoryRepository memory) => Results.Ok(await memory.GetDashboard()));
 app.MapGet("/api/memory/status", async (IMemoryRepository memory) => Results.Ok(await memory.GetStatus()));
@@ -134,11 +212,21 @@ app.MapGet("/api/memory/skills", async (string? q, IMemoryRepository memory) =>
 app.MapFallbackToFile("index.html");
 app.Run();
 
+static bool IsValidDraft(TaskDraft? draft) => draft is not null
+    && !string.IsNullOrWhiteSpace(draft.Title)
+    && !string.IsNullOrWhiteSpace(draft.Description)
+    && !string.IsNullOrWhiteSpace(draft.Section);
+
 record CreateTaskRequest(string? Text);
+record CreateTaskDraftRequest(string? Text);
+record ReviseTaskDraftRequest(TaskDraft? Draft, string? Correction);
+record ConfirmTaskDraftRequest(TaskDraft? Draft);
 record UpdateDescriptionRequest(string? Description);
 record UpdateTitleRequest(string? Title);
 record MoveTaskRequest(TaskBucket Bucket);
 record RenameSectionRequest(string? OldName, string? NewName);
+record ReorderTasksRequest(TaskBucket Bucket, string? Section, IReadOnlyList<Guid>? TaskIds);
+record ReorderSectionsRequest(TaskBucket Bucket, IReadOnlyList<string>? Sections);
 record TaskDraft(string Title, string Description, string Section);
 record TaskItem(Guid Id, string Title, string Description, string Section, TaskBucket Bucket, TaskStatus Status, DateTimeOffset CreatedAt);
 
@@ -148,6 +236,7 @@ enum TaskStatus { New, InProgress, Completed }
 interface ITaskAgent
 {
     Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections);
+    Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections);
 }
 
 // ── LLM-агент с каскадом провайдеров ────────────────────────────────────────
@@ -197,6 +286,29 @@ sealed class LlmTaskAgent : ITaskAgent
         }
         _logger.LogInformation("Все LLM-провайдеры недоступны, используется эвристика");
         return await _fallback.CreateDraftAsync(rawText, existingSections);
+    }
+
+    public async Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections)
+    {
+        var revisionRequest = BuildRevisionRequest(draft, correction);
+        foreach (var provider in _providers)
+        {
+            try
+            {
+                var revised = await provider.TryParseAsync(revisionRequest, existingSections);
+                if (revised is not null)
+                {
+                    _logger.LogInformation("Черновик задачи уточнён провайдером {Provider}", provider.Name);
+                    return revised;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Провайдер {Provider} не обработал правку: {Message}", provider.Name, ex.Message);
+            }
+        }
+        _logger.LogInformation("Все LLM-провайдеры недоступны, правка добавлена локальным агентом");
+        return await _fallback.ReviseDraftAsync(draft, correction, existingSections);
     }
 }
 
@@ -385,6 +497,15 @@ sealed class LocalTaskAgent : ITaskAgent
         return Task.FromResult(new TaskDraft(title, normalized, section));
     }
 
+    public Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections)
+    {
+        // Без сети локальный агент не может надёжно интерпретировать произвольную
+        // правку, поэтому сохраняет исходный результат и явно добавляет уточнение.
+        // При доступном LLM этот путь не используется.
+        var note = string.Join(' ', correction.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return Task.FromResult(draft with { Description = $"{draft.Description}\n\nУточнение: {note}" });
+    }
+
     private static string PickSection(string text, IReadOnlyCollection<string> existingSections)
     {
         var sections = existingSections
@@ -440,6 +561,14 @@ static class TaskPrompt
 
     public static string BuildSystemPrompt(IReadOnlyCollection<string> existingSections) =>
         Instructions + "\n\nСуществующие разделы: " + string.Join("; ", existingSections);
+
+    public static string BuildRevisionRequest(TaskDraft draft, string correction) =>
+        "Обнови черновик задачи по правке пользователя. Сохрани все детали, которые правка не отменяет. " +
+        "Верни только итоговый JSON по системной инструкции.\n\nТекущий черновик:\n" +
+        JsonSerializer.Serialize(draft, new JsonSerializerOptions
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        }) + "\n\nПравка пользователя:\n" + correction;
 
     public static readonly JsonElement Schema = JsonDocument.Parse(
         "{\"type\":\"object\",\"properties\":{" +
@@ -663,6 +792,64 @@ sealed class TaskStore
             }
             if (changed > 0) await WriteUnsafeAsync(items);
             return changed;
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<bool> ReorderTasksAsync(TaskBucket bucket, string section, IReadOnlyList<Guid> orderedIds)
+    {
+        section = section.Trim();
+        if (section.Length == 0 || orderedIds.Distinct().Count() != orderedIds.Count) return false;
+
+        await _gate.WaitAsync();
+        try
+        {
+            var items = await ReadUnsafeAsync();
+            var current = items
+                .Where(x => x.Bucket == bucket && x.Section.Equals(section, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (current.Length != orderedIds.Count || !current.Select(x => x.Id).ToHashSet().SetEquals(orderedIds)) return false;
+
+            var replacement = current.ToDictionary(x => x.Id);
+            var next = 0;
+            for (var i = 0; i < items.Count; i++)
+                if (items[i].Bucket == bucket && items[i].Section.Equals(section, StringComparison.OrdinalIgnoreCase))
+                    items[i] = replacement[orderedIds[next++]];
+
+            await WriteUnsafeAsync(items);
+            return true;
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<bool> ReorderSectionsAsync(TaskBucket bucket, IReadOnlyList<string> orderedSections)
+    {
+        var requested = orderedSections.Select(x => x?.Trim() ?? string.Empty).ToArray();
+        if (requested.Any(string.IsNullOrWhiteSpace) || requested.Distinct(StringComparer.OrdinalIgnoreCase).Count() != requested.Length)
+            return false;
+
+        await _gate.WaitAsync();
+        try
+        {
+            var items = await ReadUnsafeAsync();
+            var currentSections = items
+                .Where(x => x.Bucket == bucket)
+                .Select(x => x.Section)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (currentSections.Length != requested.Length || !currentSections.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(requested))
+                return false;
+
+            var orderedItems = requested
+                .SelectMany(section => items.Where(x => x.Bucket == bucket && x.Section.Equals(section, StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            var next = 0;
+            for (var i = 0; i < items.Count; i++)
+                if (items[i].Bucket == bucket)
+                    items[i] = orderedItems[next++];
+
+            await WriteUnsafeAsync(items);
+            return true;
         }
         finally { _gate.Release(); }
     }

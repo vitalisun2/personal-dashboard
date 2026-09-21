@@ -25,6 +25,166 @@
   const normalizeSection = s => String(s || '').trim() || 'Общее';
   const statusDotClass = s => s === 'in_progress' ? 'work' : s === 'completed' ? 'done' : 'new';
 
+  // -------- Черновик новой задачи --------
+  // Пока пользователь не нажмёт «ОК, добавить», результат агента существует
+  // только в браузере: отмена не создаёт лишнюю задачу.
+  let taskDraftSession = null;
+
+  function renderTaskDraft() {
+    if (!taskDraftSession) return;
+    const { draft, iteration } = taskDraftSession;
+    $('#taskDraftIteration').textContent = `Вариант ${iteration}`;
+    $('#taskDraftSection').textContent = normalizeSection(draft.section);
+    $('#taskDraftResultTitle').textContent = draft.title;
+    $('#taskDraftDescription').textContent = draft.description;
+  }
+
+  function setTaskDraftBusy(busy, message = '') {
+    const modal = $('#taskDraftModal');
+    modal.setAttribute('aria-busy', String(busy));
+    $('#taskDraftCorrection').disabled = busy;
+    $('#taskDraftCancel').disabled = busy;
+    $('#taskDraftRevise').disabled = busy;
+    $('#taskDraftConfirm').disabled = busy;
+    $('#taskDraftStatus').textContent = message;
+  }
+
+  function openTaskDraft(draft) {
+    taskDraftSession = { draft, iteration: 1 };
+    $('#taskDraftCorrection').value = '';
+    setTaskDraftBusy(false);
+    renderTaskDraft();
+    $('#taskDraftModal').showModal();
+    $('#taskDraftCorrection').focus();
+  }
+
+  function closeTaskDraft() {
+    if ($('#taskDraftModal').open) $('#taskDraftModal').close();
+    taskDraftSession = null;
+  }
+
+  async function reviseTaskDraft() {
+    if (!taskDraftSession) return;
+    const correction = $('#taskDraftCorrection').value.trim();
+    if (!correction) {
+      $('#taskDraftCorrection').focus();
+      $('#taskDraftStatus').textContent = 'Опишите правку, чтобы отправить её агенту.';
+      return;
+    }
+    setTaskDraftBusy(true, 'Агент обновляет черновик…');
+    try {
+      const draft = await api('/api/tasks/draft/revise', { method: 'POST', body: JSON.stringify({ draft: taskDraftSession.draft, correction }) });
+      taskDraftSession = { draft, iteration: taskDraftSession.iteration + 1 };
+      $('#taskDraftCorrection').value = '';
+      renderTaskDraft();
+      setTaskDraftBusy(false, 'Черновик обновлён. Проверьте результат.');
+      $('#taskDraftCorrection').focus();
+    } catch (err) {
+      setTaskDraftBusy(false, err.message);
+      showToast(err.message);
+    }
+  }
+
+  async function confirmTaskDraft() {
+    if (!taskDraftSession) return;
+    setTaskDraftBusy(true, 'Добавляем задачу…');
+    try {
+      const item = await api('/api/tasks/confirm', { method: 'POST', body: JSON.stringify({ draft: taskDraftSession.draft }) });
+      state.tasks.unshift({ ...item, section: normalizeSection(item.section) });
+      $('#taskInput').value = '';
+      closeTaskDraft();
+      renderTasks();
+      $('#taskInput').focus();
+      showToast('Задача добавлена');
+    } catch (err) {
+      setTaskDraftBusy(false, err.message);
+      showToast(err.message);
+    }
+  }
+
+  // -------- Browser navigation --------
+  // Все экраны получают hash-маршрут: браузерная «Назад» возвращает предыдущий
+  // экран SPA, а не перезагружает страницу или уходит к внешнему адресу.
+  const routeStateKey = 'personalDashboardRoute';
+  const taskTabs = new Set(['backlog', 'today']);
+  const memoryTabs = new Set(['overview', 'lessons', 'problems', 'skills', 'system']);
+
+  function parseRoute() {
+    const raw = location.hash.replace(/^#/, '');
+    const [path, query = ''] = raw.split('?');
+    const parts = path.split('/').filter(Boolean).map(decodeURIComponent);
+    const params = new URLSearchParams(query);
+    if (parts[0] === 'memory') {
+      const memoryTab = memoryTabs.has(parts[1]) ? parts[1] : 'overview';
+      return { main: 'memory', memoryTab, lessonId: params.get('lesson'), problemId: params.get('problem'), skillId: params.get('skill') };
+    }
+
+    const taskTab = taskTabs.has(parts[1]) ? parts[1] : 'backlog';
+    const filter = taskTab === 'today' && ['new', 'in_progress', 'completed'].includes(params.get('filter'))
+      ? params.get('filter')
+      : 'all';
+    return { main: 'tasks', taskTab, filter, taskId: params.get('task') };
+  }
+
+  function routeHash(route) {
+    const params = new URLSearchParams();
+    if (route.main === 'memory') {
+      if (route.lessonId) params.set('lesson', route.lessonId);
+      if (route.problemId) params.set('problem', route.problemId);
+      if (route.skillId) params.set('skill', route.skillId);
+      return `#/memory/${route.memoryTab || 'overview'}${params.size ? `?${params}` : ''}`;
+    }
+    if (route.filter && route.filter !== 'all') params.set('filter', route.filter);
+    if (route.taskId) params.set('task', route.taskId);
+    return `#/tasks/${route.taskTab || 'backlog'}${params.size ? `?${params}` : ''}`;
+  }
+
+  function routeEntry(route, entry) { return { [routeStateKey]: true, entry, route }; }
+
+  function navigate(route, { replace = false } = {}) {
+    const hash = routeHash(route);
+    const entry = replace ? Boolean(history.state?.entry) : false;
+    history[replace ? 'replaceState' : 'pushState'](routeEntry(route, entry), '', hash);
+    applyRoute(route);
+  }
+
+  function goBack(fallbackRoute) {
+    if (history.state?.[routeStateKey] && !history.state.entry) history.back();
+    else navigate(fallbackRoute, { replace: true });
+  }
+
+  function applyRoute(route) {
+    if (route.main === 'memory') {
+      setMain('memory');
+      setMemoryTab(route.memoryTab);
+      closeLesson(); closeProblem(); closeSkill();
+      if (route.lessonId) openLesson(route.lessonId);
+      else if (route.problemId) openProblem(route.problemId);
+      else if (route.skillId) openSkill(route.skillId);
+      return;
+    }
+
+    state.taskTab = route.taskTab;
+    state.taskFilter = route.filter;
+    setMain('tasks');
+    const task = route.taskId && state.tasks.find(item => String(item.id) === String(route.taskId));
+    if (task) {
+      state.taskTab = task.bucket;
+      state.taskFilter = 'all';
+      showTaskDetail(task);
+    } else {
+      closeTaskDetail();
+      renderTasks();
+    }
+  }
+
+  function applyCurrentRoute() {
+    const route = parseRoute();
+    const current = history.state;
+    history.replaceState(routeEntry(route, current?.[routeStateKey] ? Boolean(current.entry) : true), '', routeHash(route));
+    applyRoute(route);
+  }
+
   // -------- Main navigation --------
   function setMain(value) {
     state.main = value;
@@ -45,7 +205,8 @@
   }
 
   function createTaskRow(task) {
-    const row = document.createElement('article'); row.className = 'task-row' + (task.bucket === 'today' ? ' today' : '');
+    const row = document.createElement('article'); row.className = 'task-row' + (task.bucket === 'today' ? ' today' : ''); row.dataset.taskRow=task.id;
+    row.append(createDragHandle('task', task.id, 'Перетащить задачу'));
     const open = document.createElement('button'); open.type='button'; open.className='task-open'; open.dataset.taskOpen=task.id;
     if (task.bucket === 'today') { const dot=document.createElement('span'); dot.className=`status-dot ${statusDotClass(task.status)}`; open.append(dot); }
     const title=document.createElement('span'); title.className='task-title'; title.textContent=task.title; open.append(title);
@@ -53,6 +214,13 @@
     row.append(open, move);
     if (task.bucket === 'today') { const b=document.createElement('button'); b.type='button'; b.className='status-button'; b.dataset.taskAdvance=task.id; b.textContent=statusLabel[task.status]; row.append(b); }
     return row;
+  }
+
+  function createDragHandle(kind, id, label) {
+    const handle=document.createElement('button'); handle.type='button'; handle.className='drag-handle';
+    handle.dataset.dragKind=kind; handle.dataset.dragId=id; handle.title=label; handle.setAttribute('aria-label',label);
+    handle.textContent='☰';
+    return handle;
   }
 
   function renderTasks() {
@@ -66,8 +234,10 @@
     visible.forEach(t => { const s=normalizeSection(t.section); if(!grouped.has(s)) grouped.set(s,[]); grouped.get(s).push(t); });
     const container=$('#taskList'); container.replaceChildren();
     for (const [section, items] of grouped) {
-      const group=document.createElement('section'); group.className='task-group';
-      const h=document.createElement('button'); h.type='button'; h.className='group-header'; h.dataset.taskGroup=section; h.textContent=section; group.append(h);
+      const group=document.createElement('section'); group.className='task-group'; group.dataset.sectionGroup=section;
+      const h=document.createElement('div'); h.className='group-header';
+      const toggle=document.createElement('button'); toggle.type='button'; toggle.className='group-toggle'; toggle.dataset.taskGroup=section; toggle.textContent=section;
+      h.append(createDragHandle('section', section, 'Перетащить раздел'), toggle); group.append(h);
       if (state.expanded[state.taskTab].has(section)) { const list=document.createElement('div'); list.className='group-tasks'; items.forEach(t=>list.append(createTaskRow(t))); group.append(list); }
       container.append(group);
     }
@@ -85,9 +255,9 @@
     const del=document.createElement('button');del.type='button';del.className='detail-delete';del.dataset.taskDelete=task.id;del.textContent='Удалить';actions.append(del);
   }
   function closeTaskDetail(){state.selectedTaskId=null;$('#detailView').classList.add('hidden');$('#listView').classList.remove('hidden');}
-  async function moveTask(id){const t=state.tasks.find(x=>x.id===id);if(!t)return;const updated=await api(`/api/tasks/${id}/bucket`,{method:'PUT',body:JSON.stringify({bucket:t.bucket==='backlog'?'today':'backlog'})});Object.assign(t,updated,{section:normalizeSection(updated.section)});renderTasks();if(state.selectedTaskId===id)showTaskDetail(t);}
-  async function advanceTask(id){const t=state.tasks.find(x=>x.id===id);if(!t)return;const r=await api(`/api/tasks/${id}/advance`,{method:'PUT',body:'{}'});if(r.deleted){state.tasks=state.tasks.filter(x=>x.id!==id);if(state.selectedTaskId===id)closeTaskDetail();}else Object.assign(t,r,{section:normalizeSection(r.section)});renderTasks();if(state.selectedTaskId===id&&state.tasks.includes(t))showTaskDetail(t);}
-  async function deleteTask(id){if(!confirm('Удалить задачу?'))return;const t=state.tasks.find(x=>x.id===id);if(!t)return;await api(`/api/tasks/${id}`,{method:'DELETE'});state.tasks=state.tasks.filter(x=>x.id!==id);if(state.selectedTaskId===id)closeTaskDetail();renderTasks();showToast('Задача удалена');}
+  async function moveTask(id){const t=state.tasks.find(x=>x.id===id);if(!t)return;const updated=await api(`/api/tasks/${id}/bucket`,{method:'PUT',body:JSON.stringify({bucket:t.bucket==='backlog'?'today':'backlog'})});Object.assign(t,updated,{section:normalizeSection(updated.section)});renderTasks();if(state.selectedTaskId===id){showTaskDetail(t);navigate({main:'tasks',taskTab:t.bucket,filter:'all',taskId:id},{replace:true});}}
+  async function advanceTask(id){const t=state.tasks.find(x=>x.id===id);if(!t)return;const r=await api(`/api/tasks/${id}/advance`,{method:'PUT',body:'{}'});if(r.deleted){state.tasks=state.tasks.filter(x=>x.id!==id);if(state.selectedTaskId===id)navigate({main:'tasks',taskTab:state.taskTab,filter:state.taskFilter},{replace:true});}else Object.assign(t,r,{section:normalizeSection(r.section)});renderTasks();if(state.selectedTaskId===id&&state.tasks.includes(t))showTaskDetail(t);}
+  async function deleteTask(id){if(!confirm('Удалить задачу?'))return;const t=state.tasks.find(x=>x.id===id);if(!t)return;await api(`/api/tasks/${id}`,{method:'DELETE'});state.tasks=state.tasks.filter(x=>x.id!==id);if(state.selectedTaskId===id)navigate({main:'tasks',taskTab:state.taskTab,filter:state.taskFilter},{replace:true});renderTasks();showToast('Задача удалена');}
 
   // -------- Редактирование описания задачи --------
   function beginDescriptionEdit() {
@@ -216,6 +386,71 @@
     closeRenameModal();
   }
 
+  // -------- Перетаскивание задач и разделов --------
+  // Реализовано через Pointer Events, поэтому одинаково работает мышью и касанием.
+  let activeDrag = null;
+
+  function startDrag(event) {
+    const handle=event.target.closest('[data-drag-kind]');
+    if (!handle || event.button !== 0 || activeDrag) return;
+    if (state.taskTab==='today' && state.taskFilter!=='all') {
+      showToast('Для изменения порядка выберите фильтр «Все».');
+      return;
+    }
+    const kind=handle.dataset.dragKind;
+    const item=kind==='task' ? handle.closest('.task-row') : handle.closest('.task-group');
+    if (!item) return;
+    activeDrag={ kind, item, pointerId:event.pointerId, moved:false };
+    item.classList.add('dragging');
+    handle.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  }
+
+  function moveDrag(event) {
+    const drag=activeDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const target=document.elementFromPoint(event.clientX,event.clientY)?.closest(drag.kind==='task'?'.task-row':'.task-group');
+    if (!target || target===drag.item) return;
+    const parent=drag.kind==='task' ? drag.item.closest('.group-tasks') : $('#taskList');
+    if (!parent || target.parentElement!==parent) return;
+    const rect=target.getBoundingClientRect();
+    parent.insertBefore(drag.item,event.clientY<rect.top+rect.height/2?target:target.nextSibling);
+    drag.moved=true;
+    event.preventDefault();
+  }
+
+  async function finishDrag(event, commit) {
+    const drag=activeDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    activeDrag=null;
+    drag.item.classList.remove('dragging');
+    if (!drag.moved) return;
+    if (!commit) { await loadTasks(); return; }
+
+    try {
+      if (drag.kind==='task') {
+        const list=drag.item.closest('.group-tasks');
+        const group=drag.item.closest('.task-group');
+        const taskIds=[...list.querySelectorAll('[data-task-row]')].map(row=>row.dataset.taskRow);
+        await api('/api/tasks/reorder',{method:'PUT',body:JSON.stringify({bucket:state.taskTab,section:group.dataset.sectionGroup,taskIds})});
+        showToast('Порядок задач сохранён');
+      } else {
+        const sections=[...$('#taskList').querySelectorAll(':scope > [data-section-group]')].map(group=>group.dataset.sectionGroup);
+        await api('/api/tasks/sections/reorder',{method:'PUT',body:JSON.stringify({bucket:state.taskTab,sections})});
+        showToast('Порядок разделов сохранён');
+      }
+      await loadTasks();
+    } catch (err) {
+      await loadTasks();
+      showToast(err.message);
+    }
+  }
+
+  document.addEventListener('pointerdown', startDrag, true);
+  document.addEventListener('pointermove', moveDrag, true);
+  document.addEventListener('pointerup', event => { finishDrag(event,true); }, true);
+  document.addEventListener('pointercancel', event => { finishDrag(event,false); }, true);
+
   document.addEventListener('pointerdown', e => {
     const g = e.target.closest('[data-task-group]');
     if (!g || e.button > 1) return;
@@ -303,7 +538,7 @@
   function closeProblem(){state.selectedProblem=null;$('#problemDetail').classList.add('hidden');$('#memoryMain').classList.remove('hidden');}
   function renderProblemSolutions(p){const box=$('#problemDetailSolutions');box.replaceChildren();const sols=p.solutions;if(!Array.isArray(sols)||!sols.length){const d=document.createElement('div');d.className='problem-no-solutions';d.textContent='Решения пока не загружены';box.append(d);return;}sols.forEach(sol=>box.append(createSolutionCard(sol)));}
   function lessonStatusWord(s){return s==='active'?'активен':s==='superseded'?'заменено':s==='obsolete'?'устарел':String(s??'');}
-  function createSolutionCard(sol){const card=document.createElement('div');card.className='solution-card';const head=document.createElement('div');head.className='solution-head';const t=document.createElement('button');t.type='button';t.className='solution-open';t.textContent=sol.title||sol.id;t.title='Открыть урок';t.addEventListener('click',()=>{if(!openLesson(sol.id))toggleSolutionInline(card,sol);});const st=document.createElement('span');st.className='solution-status '+(sol.status==='active'?'active':sol.status==='superseded'?'superseded':sol.status==='obsolete'?'obsolete':'');st.textContent=lessonStatusWord(sol.status);head.append(t,st);const stats=document.createElement('div');stats.className='solution-stats';stats.textContent=`${sol.appliedCount??0} применений · ${sol.verifiedCount??0} подтверждено`;card.append(head,stats);return card;}
+  function createSolutionCard(sol){const card=document.createElement('div');card.className='solution-card';const head=document.createElement('div');head.className='solution-head';const t=document.createElement('button');t.type='button';t.className='solution-open';t.textContent=sol.title||sol.id;t.title='Открыть урок';t.addEventListener('click',()=>{if((state.dashboard&&state.dashboard.lessons||[]).some(x=>String(x.id)===String(sol.id)))navigate({main:'memory',memoryTab:'lessons',lessonId:sol.id});else toggleSolutionInline(card,sol);});const st=document.createElement('span');st.className='solution-status '+(sol.status==='active'?'active':sol.status==='superseded'?'superseded':sol.status==='obsolete'?'obsolete':'');st.textContent=lessonStatusWord(sol.status);head.append(t,st);const stats=document.createElement('div');stats.className='solution-stats';stats.textContent=`${sol.appliedCount??0} применений · ${sol.verifiedCount??0} подтверждено`;card.append(head,stats);return card;}
   function toggleSolutionInline(card,sol){const old=card.querySelector('.solution-inline');if(old){old.remove();return;}const wrap=document.createElement('div');wrap.className='solution-inline';const note=document.createElement('div');note.className='muted small-text';note.textContent='Урок не найден в общем списке — содержимое решения:';wrap.append(note);const fields=[['Проблема',sol.problem],['Условия',sol.conditions],['Причина',sol.cause],['Рабочий метод',sol.workingMethod]];fields.forEach(([label,txt])=>{if(!txt)return;const c=document.createElement('div');c.className='description-card';const l=document.createElement('div');l.className='description-label';l.textContent=label;const pp=document.createElement('p');pp.textContent=txt;c.append(l,pp);wrap.append(c);});const ev=[];if(sol.evidence)ev.push(sol.evidence);if(sol.verification)ev.push(sol.verification);if(ev.length){const c=document.createElement('div');c.className='description-card';const l=document.createElement('div');l.className='description-label';l.textContent='Доказательство и проверка';const pp=document.createElement('p');pp.textContent=ev.join(' ');c.append(l,pp);wrap.append(c);}if(!wrap.querySelector('.description-card')){const c=document.createElement('div');c.className='muted small-text';c.textContent='Дополнительное содержимое решения недоступно';wrap.append(c);}card.append(wrap);}
   function openSkill(id){const s=state.skills.find(x=>String(x.id)===String(id));if(!s)return;state.selectedSkill=id;$('#memoryMain').classList.add('hidden');$('#skillDetail').classList.remove('hidden');$('#lessonDetail').classList.add('hidden');$('#problemDetail').classList.add('hidden');$('#skillDetailProject').textContent=s.project||projectName(s.projectId);$('#skillDetailStatus').textContent=skillStatusCap(s.status);$('#skillDetailStatus').className=`skill-status-chip ${s.status==='obsolete'?'obsolete':'active'}`;$('#skillDetailScope').textContent=s.scope||'Общее';$('#skillDetailTitle').textContent=s.name;const meta=[];meta.push(`Версия ${s.version||'—'}`);if(s.versionCount)meta.push(`всего версий: ${s.versionCount}`);meta.push(`Зарегистрирован: ${formatTs(s.registeredAt)||'—'}`);meta.push(`Обновлён: ${formatTs(s.updatedAt)||'—'}`);$('#skillDetailMeta').textContent=meta.join(' · ');$('#skillDetailDescription').textContent=s.description||'';renderSkillExample(s);renderSkillDeps(s);renderSkillComputers(s);}
   function closeSkill(){state.selectedSkill=null;$('#skillDetail').classList.add('hidden');$('#memoryMain').classList.remove('hidden');}
@@ -330,18 +565,28 @@
   })();
 
   // -------- Events --------
-  $$('[data-main]').forEach(b=>b.addEventListener('click',()=>setMain(b.dataset.main)));
-  $('#backlogTab').addEventListener('click',()=>{state.taskTab='backlog';state.taskFilter='all';closeTaskDetail();renderTasks();});
-  $('#todayTab').addEventListener('click',()=>{state.taskTab='today';state.taskFilter='all';closeTaskDetail();renderTasks();});
-  $$('.filter').forEach(b=>b.addEventListener('click',()=>{state.taskFilter=b.dataset.filter;renderTasks();}));
+  $$('[data-main]').forEach(b=>b.addEventListener('click',()=>{
+    navigate(b.dataset.main==='memory'
+      ? {main:'memory',memoryTab:state.memoryTab}
+      : {main:'tasks',taskTab:state.taskTab,filter:state.taskFilter});
+  }));
+  $('#backlogTab').addEventListener('click',()=>navigate({main:'tasks',taskTab:'backlog',filter:'all'}));
+  $('#todayTab').addEventListener('click',()=>navigate({main:'tasks',taskTab:'today',filter:'all'}));
+  $$('.filter').forEach(b=>b.addEventListener('click',()=>navigate({main:'tasks',taskTab:'today',filter:b.dataset.filter})));
   $('#collapseAll').addEventListener('click',()=>{state.expanded[state.taskTab].clear();renderTasks();});
   $('#expandAll').addEventListener('click',()=>{state.tasks.filter(t=>t.bucket===state.taskTab).forEach(t=>state.expanded[state.taskTab].add(normalizeSection(t.section)));renderTasks();});
-  $('#backButton').addEventListener('click', closeTaskDetail);
+  $('#backButton').addEventListener('click',()=>goBack({main:'tasks',taskTab:state.taskTab,filter:state.taskFilter}));
     $('#detailDescription').addEventListener('click', beginDescriptionEdit);
     $('#detailTitle').addEventListener('click', beginTitleEdit);
-  $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();if(!text)return;const orig=btn.textContent;const dots=['.','..','...'];let i=0;btn.disabled=true;btn.classList.add('sending');btn.textContent=dots[0];const timer=setInterval(()=>{i=(i+1)%dots.length;btn.textContent=dots[i];},375);try{const item=await api('/api/tasks',{method:'POST',body:JSON.stringify({text})});state.tasks.unshift({...item,section:normalizeSection(item.section)});$('#taskInput').value='';renderTasks();}catch(err){showToast(err.message);}finally{clearInterval(timer);btn.disabled=false;btn.classList.remove('sending');btn.textContent=orig;}});
+  $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();if(!text)return;const orig=btn.textContent;btn.disabled=true;btn.classList.add('sending');btn.textContent='Готовим…';try{openTaskDraft(await api('/api/tasks/draft',{method:'POST',body:JSON.stringify({text})}));}catch(err){showToast(err.message);}finally{btn.disabled=false;btn.classList.remove('sending');btn.textContent=orig;}});
+  $('#taskDraftForm').addEventListener('submit', e => { e.preventDefault(); reviseTaskDraft(); });
+  $('#taskDraftConfirm').addEventListener('click', confirmTaskDraft);
+  $('#taskDraftCancel').addEventListener('click', closeTaskDraft);
+  $('#taskDraftCorrection').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); reviseTaskDraft(); } });
+  $('#taskDraftModal').addEventListener('cancel', e => { if ($('#taskDraftModal').getAttribute('aria-busy') === 'true') e.preventDefault(); });
+  $('#taskDraftModal').addEventListener('close', () => { taskDraftSession = null; });
 
-  $$('.memory-tab').forEach(b=>b.addEventListener('click',()=>setMemoryTab(b.dataset.memoryTab)));
+  $$('.memory-tab').forEach(b=>b.addEventListener('click',()=>navigate({main:'memory',memoryTab:b.dataset.memoryTab})));
   $$('.secondary-tab').forEach(b=>b.addEventListener('click',()=>setSecondary(b.dataset.secondary)));
   $('#lessonSearch').addEventListener('input',debounce(()=>searchLessons().catch(e=>showToast(e.message))));
   $('#lessonProject').addEventListener('change',()=>searchLessons().catch(e=>showToast(e.message)));
@@ -349,25 +594,29 @@
   $('#problemSearch').addEventListener('input',debounce(()=>searchProblems().catch(e=>showToast(e.message))));
   $('#problemProject').addEventListener('change',()=>searchProblems().catch(e=>showToast(e.message)));
   $('#skillSearch').addEventListener('input',debounce(()=>searchSkills().catch(e=>showToast(e.message))));
-  $('#lessonBack').addEventListener('click',closeLesson);
-  $('#problemDetailBack').addEventListener('click',closeProblem);
-  $('#skillDetailBack').addEventListener('click',closeSkill);
+  $('#lessonBack').addEventListener('click',()=>goBack({main:'memory',memoryTab:'lessons'}));
+  $('#problemDetailBack').addEventListener('click',()=>goBack({main:'memory',memoryTab:'problems'}));
+  $('#skillDetailBack').addEventListener('click',()=>goBack({main:'memory',memoryTab:'skills'}));
   $$('[data-lesson-sort]').forEach(b=>b.addEventListener('click',()=>{state.lessonSort=b.dataset.lessonSort;$$('[data-lesson-sort]').forEach(x=>x.classList.toggle('active',x===b));searchLessons().catch(e=>showToast(e.message));}));
   $$('[data-recent-tab]').forEach(b=>b.addEventListener('click',()=>setRecentTab(b.dataset.recentTab)));
 
   document.addEventListener('click',async e=>{
     try{
+      if(e.target.closest('[data-drag-kind]'))return;
       const g=e.target.closest('[data-task-group]');if(g){const set=state.expanded[state.taskTab];set.has(g.dataset.taskGroup)?set.delete(g.dataset.taskGroup):set.add(g.dataset.taskGroup);renderTasks();return;}
-      const o=e.target.closest('[data-task-open]');if(o){const t=state.tasks.find(x=>x.id===o.dataset.taskOpen);if(t)showTaskDetail(t);return;}
+      const o=e.target.closest('[data-task-open]');if(o){const t=state.tasks.find(x=>x.id===o.dataset.taskOpen);if(t)navigate({main:'tasks',taskTab:t.bucket,filter:'all',taskId:t.id});return;}
       const m=e.target.closest('[data-task-move]');if(m){await moveTask(m.dataset.taskMove);return;}
       const a=e.target.closest('[data-task-advance]');if(a){await advanceTask(a.dataset.taskAdvance);return;}
       const d=e.target.closest('[data-task-delete]');if(d){await deleteTask(d.dataset.taskDelete);return;}
-      const l=e.target.closest('[data-lesson-open]');if(l){openLesson(l.dataset.lessonOpen);return;}
-      const pr=e.target.closest('[data-problem-open]');if(pr){openProblem(pr.dataset.problemOpen);return;}
-      const sk=e.target.closest('[data-skill-open]');if(sk){openSkill(sk.dataset.skillOpen);return;}
+      const l=e.target.closest('[data-lesson-open]');if(l){navigate({main:'memory',memoryTab:'lessons',lessonId:l.dataset.lessonOpen});return;}
+      const pr=e.target.closest('[data-problem-open]');if(pr){navigate({main:'memory',memoryTab:'problems',problemId:pr.dataset.problemOpen});return;}
+      const sk=e.target.closest('[data-skill-open]');if(sk){navigate({main:'memory',memoryTab:'skills',skillId:sk.dataset.skillOpen});return;}
     }catch(err){showToast(err.message);}
   });
 
-  async function init(){try{await Promise.all([loadTasks(),loadMemory()]);setMain('tasks');setMemoryTab('overview');setSecondary('agents');}catch(err){showToast(err.message);}}
+  window.addEventListener('popstate', applyCurrentRoute);
+  window.addEventListener('hashchange', applyCurrentRoute);
+
+  async function init(){try{await Promise.all([loadTasks(),loadMemory()]);setSecondary('agents');applyCurrentRoute();}catch(err){showToast(err.message);}}
   init();
 })();

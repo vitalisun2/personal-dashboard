@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light dark">
   <meta http-equiv="Cache-Control" content="no-cache, no-store">
   <title>My Dashboard</title>
-  <link rel="stylesheet" href="styles.css?v=2">
+  <link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
   <div class="app-shell">
@@ -19,30 +19,32 @@
     <main class="content">
       <section id="tasksSection">
         <section id="listView">
-          <header class="page-head">
-            <div><div class="eyebrow">ЗАДАЧИ</div><h1 id="pageTitle">Backlog</h1></div>
-            <div class="head-controls">
-              <div class="segmented">
-                <button id="backlogTab" class="segment active" type="button">Backlog</button>
-                <button id="todayTab" class="segment" type="button">Сегодня</button>
+          <div class="task-screen-toolbar">
+            <header class="page-head">
+              <div><div class="eyebrow">ЗАДАЧИ</div><h1 id="pageTitle">Backlog</h1></div>
+              <div class="head-controls">
+                <div class="segmented">
+                  <button id="backlogTab" class="segment active" type="button">Backlog</button>
+                  <button id="todayTab" class="segment" type="button">Сегодня</button>
+                </div>
+                <div class="group-controls">
+                  <button id="collapseAll" class="icon-button" type="button" title="Свернуть все" aria-label="Свернуть все">⌃</button>
+                  <button id="expandAll" class="icon-button" type="button" title="Развернуть все" aria-label="Развернуть все">⌄</button>
+                </div>
               </div>
-              <div class="group-controls">
-                <button id="collapseAll" class="icon-button" type="button" title="Свернуть все" aria-label="Свернуть все">⌃</button>
-                <button id="expandAll" class="icon-button" type="button" title="Развернуть все" aria-label="Развернуть все">⌄</button>
-              </div>
+            </header>
+
+            <form id="addForm" class="add-form">
+              <input id="taskInput" type="text" placeholder="Опиши новую задачу…" autocomplete="off">
+              <button class="primary" type="submit">Добавить</button>
+            </form>
+
+            <div id="filters" class="filters hidden">
+              <button class="filter active" data-filter="all" type="button">Все</button>
+              <button class="filter" data-filter="new" type="button"><span class="legend-dot new"></span>Новые</button>
+              <button class="filter" data-filter="in_progress" type="button"><span class="legend-dot work"></span>В работе</button>
+              <button class="filter" data-filter="completed" type="button"><span class="legend-dot done"></span>Завершены</button>
             </div>
-          </header>
-
-          <form id="addForm" class="add-form">
-            <input id="taskInput" type="text" placeholder="Опиши новую задачу…" autocomplete="off">
-            <button class="primary" type="submit">Добавить</button>
-          </form>
-
-          <div id="filters" class="filters hidden">
-            <button class="filter active" data-filter="all" type="button">Все</button>
-            <button class="filter" data-filter="new" type="button"><span class="legend-dot new"></span>Новые</button>
-            <button class="filter" data-filter="in_progress" type="button"><span class="legend-dot work"></span>В работе</button>
-            <button class="filter" data-filter="completed" type="button"><span class="legend-dot done"></span>Завершены</button>
           </div>
 
           <div id="taskList" class="task-list"></div>
@@ -50,7 +52,7 @@
         </section>
 
         <section id="detailView" class="detail hidden">
-          <button id="backButton" class="back-button" type="button">← Назад</button>
+          <div class="detail-backbar"><button id="backButton" class="back-button" type="button">← Назад</button></div>
           <div class="detail-inner">
             <div id="detailSection" class="detail-section"></div>
             <h1 id="detailTitle"></h1>
@@ -209,7 +211,34 @@
     </form>
   </dialog>
 
+  <dialog id="taskDraftModal" class="modal task-draft-modal" aria-labelledby="taskDraftTitle" aria-describedby="taskDraftHint">
+    <form id="taskDraftForm" class="modal-form">
+      <div class="modal-heading">
+        <div>
+          <div class="modal-kicker">Черновик от агента</div>
+          <div class="modal-title" id="taskDraftTitle">Проверьте задачу</div>
+        </div>
+        <span id="taskDraftIteration" class="draft-iteration">Вариант 1</span>
+      </div>
+      <p id="taskDraftHint" class="modal-hint">Задача ещё не сохранена. Подтвердите результат или попросите агента его изменить.</p>
+      <section class="draft-preview" aria-label="Черновик задачи">
+        <div class="draft-section"><span>Раздел</span><strong id="taskDraftSection"></strong></div>
+        <h2 id="taskDraftResultTitle"></h2>
+        <p id="taskDraftDescription"></p>
+      </section>
+      <div id="taskDraftStatus" class="draft-status" role="status" aria-live="polite"></div>
+      <label class="modal-label" for="taskDraftCorrection">Что изменить?</label>
+      <textarea id="taskDraftCorrection" rows="3" maxlength="1200" placeholder="Например: сделай заголовок короче и добавь срок до пятницы"></textarea>
+      <div class="modal-hint">Можно отправлять правки столько раз, сколько нужно. Ctrl+Enter — отправить правку.</div>
+      <div class="modal-actions draft-actions">
+        <button type="button" id="taskDraftCancel" class="modal-cancel">Отмена</button>
+        <button type="submit" id="taskDraftRevise" class="modal-cancel">Отправить правку</button>
+        <button type="button" id="taskDraftConfirm" class="primary">ОК, добавить</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

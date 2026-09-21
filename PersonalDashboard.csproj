@@ -7,5 +7,8 @@
   <ItemGroup>
       <InternalsVisibleTo Include="PersonalDashboard.Tests" />
       <Compile Remove="tests/**" />
+      <Content Remove="tests/**" />
+      <EmbeddedResource Remove="tests/**" />
+      <None Remove="tests/**" />
     </ItemGroup>
 </Project>
