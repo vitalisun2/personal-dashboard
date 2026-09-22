@@ -441,7 +441,8 @@
     const kind=handle.dataset.dragKind;
     const item=kind==='task' ? handle.closest('.task-row') : handle.closest('.task-group');
     if (!item) return;
-    activeDrag={ kind, item, pointerId:event.pointerId, moved:false };
+    activeDrag={ kind, item, pointerId:event.pointerId, moved:false,
+      startSection: kind==='task' ? item.closest('.task-group')?.dataset.sectionGroup : null };
     item.classList.add('dragging');
     handle.setPointerCapture?.(event.pointerId);
     event.preventDefault();
@@ -450,10 +451,32 @@
   function moveDrag(event) {
     const drag=activeDrag;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const target=document.elementFromPoint(event.clientX,event.clientY)?.closest(drag.kind==='task'?'.task-row':'.task-group');
+    const point=document.elementFromPoint(event.clientX,event.clientY);
+    if (drag.kind==='task') {
+      // Задачу можно перетащить не только внутри своего раздела, но и в другой
+      // раздел текущей страницы: бросок позиционирует её внутри целевого списка.
+      const row=point?.closest('.task-row');
+      let list, ref;
+      if (row && row!==drag.item) {
+        list=row.closest('.group-tasks');
+        const rect=row.getBoundingClientRect();
+        ref=event.clientY<rect.top+rect.height/2 ? row : row.nextSibling;
+      } else {
+        const group=point?.closest('.task-group');
+        if (!group || group===drag.item.closest('.task-group')) return;
+        list=group.querySelector(':scope > .group-tasks');
+        if (!list) return;
+        ref=null; // бросок на заголовок или пустое место раздела — в конец списка
+      }
+      list.insertBefore(drag.item, ref);
+      drag.moved=true;
+      event.preventDefault();
+      return;
+    }
+    const target=point?.closest('.task-group');
     if (!target || target===drag.item) return;
-    const parent=drag.kind==='task' ? drag.item.closest('.group-tasks') : $('#taskList');
-    if (!parent || target.parentElement!==parent) return;
+    const parent=$('#taskList');
+    if (target.parentElement!==parent) return;
     const rect=target.getBoundingClientRect();
     parent.insertBefore(drag.item,event.clientY<rect.top+rect.height/2?target:target.nextSibling);
     drag.moved=true;
@@ -472,9 +495,14 @@
       if (drag.kind==='task') {
         const list=drag.item.closest('.group-tasks');
         const group=drag.item.closest('.task-group');
+        if (!list || !group) { await loadTasks(); return; }
+        const section=group.dataset.sectionGroup;
         const taskIds=[...list.querySelectorAll('[data-task-row]')].map(row=>row.dataset.taskRow);
-        await api('/api/tasks/reorder',{method:'PUT',body:JSON.stringify({bucket:state.taskTab,section:group.dataset.sectionGroup,taskIds})});
-        showToast('Порядок задач сохранён');
+        const movedToAnotherSection = section !== drag.startSection;
+        if (movedToAnotherSection)
+          await api(`/api/tasks/${drag.item.dataset.taskRow}/section`,{method:'PUT',body:JSON.stringify({section})});
+        await api('/api/tasks/reorder',{method:'PUT',body:JSON.stringify({bucket:state.taskTab,section,taskIds})});
+        showToast(movedToAnotherSection ? `Задача перенесена в раздел «${section}»` : 'Порядок задач сохранён');
       } else {
         const sections=[...$('#taskList').querySelectorAll(':scope > [data-section-group]')].map(group=>group.dataset.sectionGroup);
         await api('/api/tasks/sections/reorder',{method:'PUT',body:JSON.stringify({bucket:state.taskTab,sections})});

@@ -154,6 +154,20 @@ app.MapPut("/api/tasks/{id:guid}/title", async (Guid id, UpdateTitleRequest requ
     return updated is null ? Results.NotFound() : Results.Ok(updated);
 });
 
+// Перенос задачи в другой раздел текущей вкладки: вызывается перетаскиванием
+// за ручку ☰, когда задача брошена в список другого раздела.
+app.MapPut("/api/tasks/{id:guid}/section", async (Guid id, UpdateSectionRequest request, TaskStore store) =>
+{
+    var section = request.Section?.Trim();
+    if (string.IsNullOrWhiteSpace(section))
+        return Results.BadRequest(new { message = "Нужен раздел." });
+    if (section.Length > 40)
+        return Results.BadRequest(new { message = "Название раздела должно быть не длиннее 40 символов." });
+
+    var updated = await store.UpdateAsync(id, task => task with { Section = section });
+    return updated is not null ? Results.Ok(updated) : Results.NotFound();
+});
+
 // Переименование раздела: новое название применяется ко всем задачам этого раздела
 app.MapPut("/api/tasks/sections/rename", async (RenameSectionRequest request, TaskStore store) =>
 {
@@ -223,6 +237,7 @@ record ReviseTaskDraftRequest(TaskDraft? Draft, string? Correction);
 record ConfirmTaskDraftRequest(TaskDraft? Draft);
 record UpdateDescriptionRequest(string? Description);
 record UpdateTitleRequest(string? Title);
+record UpdateSectionRequest(string? Section);
 record MoveTaskRequest(TaskBucket Bucket);
 record RenameSectionRequest(string? OldName, string? NewName);
 record ReorderTasksRequest(TaskBucket Bucket, string? Section, IReadOnlyList<Guid>? TaskIds);
