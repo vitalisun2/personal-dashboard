@@ -61,11 +61,185 @@ public sealed class ScopedChatTests
         Assert.IsNotNull(pending.Session!.Pending);
 
         var completed = await chat.SendAsync(pending.Session.Id, AC.ChatScope.Knowledge, new AC.ChatMessageRequest("План"), CancellationToken.None);
-        Assert.IsFalse(completed.Reply!.NeedsClarification);
+        Assert.IsTrue(completed.Reply!.NeedsClarification);
+        Assert.AreEqual(0, knowledgeStore.Writes);
+        var confirmed = await chat.SendAsync(pending.Session.Id, AC.ChatScope.Knowledge, new AC.ChatMessageRequest("да, подтверждаю"), CancellationToken.None);
+        Assert.IsFalse(confirmed.Reply!.NeedsClarification);
+        Assert.IsTrue(confirmed.Reply.ChangedData);
         var created = knowledgeStore.Value.Nodes.Single(node => !node.IsSection);
         Assert.AreEqual("План", created.Title);
         Assert.AreEqual("Текст", created.Content);
         Assert.AreEqual(section.Id, created.ParentId);
+    }
+
+    [TestMethod]
+    public async Task ContentMutationShowsFullPreviewWithoutWriting()
+    {
+        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Исходный текст" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        var responder = new CountingResponder();
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), responder);
+
+        var reply = await facade.HandleAsync(new AC.ChatTurn("Добавь в документ док 4 текст следующего содержания: Нужно добавить по 2 дерева для каждой локации", true, null, []), CancellationToken.None);
+
+        Assert.IsFalse(reply.ChangedData);
+        Assert.IsTrue(reply.NeedsClarification);
+        Assert.IsNotNull(reply.Pending);
+        Assert.Contains("Документ: «Doc 4»", reply.Text);
+        Assert.Contains("Операция: добавить", reply.Text);
+        Assert.Contains("Исходный текст" + Environment.NewLine + "Нужно добавить по 2 дерева для каждой локации", reply.Text);
+        Assert.AreEqual("Исходный текст", store.Value.Nodes.Single().Content);
+        Assert.AreEqual(0, store.Writes);
+        Assert.AreEqual(0, responder.Calls);
+    }
+
+    [TestMethod]
+    public async Task PositiveConfirmationCommitsAndVerifiesPreviewedMutation()
+    {
+        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Исходный текст" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), new CountingResponder());
+        var preview = await facade.HandleAsync(new AC.ChatTurn("Добавь в документ док 4 текст следующего содержания: Нужно добавить по 2 дерева для каждой локации", true, null, []), CancellationToken.None);
+
+        var committed = await facade.HandleAsync(new AC.ChatTurn("да, подтверждаю", false, preview.Pending, []), CancellationToken.None);
+
+        Assert.IsTrue(committed.ChangedData, committed.Text);
+        Assert.IsFalse(committed.NeedsClarification);
+        Assert.AreEqual("Исходный текст" + Environment.NewLine + "Нужно добавить по 2 дерева для каждой локации", store.Value.Nodes.Single().Content);
+        Assert.AreEqual(1, store.Writes);
+        Assert.Contains("проверено", committed.Text);
+    }
+
+    [TestMethod]
+    public async Task RejectionCancelsPreviewWithoutMutation()
+    {
+        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Исходный текст" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), new CountingResponder());
+        var preview = await facade.HandleAsync(new AC.ChatTurn("Добавь в документ док 4 текст следующего содержания: Новый текст", true, null, []), CancellationToken.None);
+
+        var rejected = await facade.HandleAsync(new AC.ChatTurn("Нет, не надо", false, preview.Pending, []), CancellationToken.None);
+
+        Assert.IsFalse(rejected.NeedsClarification, rejected.Text);
+        Assert.IsFalse(rejected.ChangedData);
+        Assert.IsNull(rejected.Pending);
+        Assert.AreEqual("Исходный текст", document.Content);
+        Assert.AreEqual(0, store.Writes);
+    }
+
+    [TestMethod]
+    public async Task AmbiguousConfirmationKeepsPreviewPendingWithoutMutation()
+    {
+        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Исходный текст" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), new CountingResponder());
+        var preview = await facade.HandleAsync(new AC.ChatTurn("Добавь в документ док 4 текст следующего содержания: Новый текст", true, null, []), CancellationToken.None);
+
+        var unclear = await facade.HandleAsync(new AC.ChatTurn("А что сейчас записано?", false, preview.Pending, []), CancellationToken.None);
+
+        Assert.IsTrue(unclear.NeedsClarification);
+        Assert.IsNotNull(unclear.Pending);
+        Assert.Contains("Предпросмотр", unclear.Text);
+        Assert.AreEqual("Исходный текст", document.Content);
+        Assert.AreEqual(0, store.Writes);
+
+        var confirmed = await facade.HandleAsync(new AC.ChatTurn("да, подтверждаю", false, unclear.Pending, []), CancellationToken.None);
+        Assert.IsTrue(confirmed.ChangedData, confirmed.Text);
+        Assert.AreEqual("Исходный текст" + Environment.NewLine + "Новый текст", document.Content);
+        Assert.AreEqual(1, store.Writes);
+    }
+
+    [TestMethod]
+    public async Task StaleContentPreviewRefreshesBeforeAnyWriteAndRequiresNewApproval()
+    {
+        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Исходный текст" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), new CountingResponder());
+        var preview = await facade.HandleAsync(new AC.ChatTurn("Добавь в документ док 4 текст следующего содержания: Новый текст", true, null, []), CancellationToken.None);
+        document.Content = "Внешнее обновление";
+
+        var refreshed = await facade.HandleAsync(new AC.ChatTurn("да, подтверждаю", false, preview.Pending, []), CancellationToken.None);
+
+        Assert.IsTrue(refreshed.NeedsClarification);
+        Assert.IsNotNull(refreshed.Pending);
+        Assert.Contains("Данные изменились", refreshed.Text);
+        Assert.Contains("Внешнее обновление" + Environment.NewLine + "Новый текст", refreshed.Text);
+        Assert.AreEqual("Внешнее обновление", document.Content);
+        Assert.AreEqual(0, store.Writes);
+
+        var committed = await facade.HandleAsync(new AC.ChatTurn("подтверждаю", false, refreshed.Pending, []), CancellationToken.None);
+        Assert.IsTrue(committed.ChangedData, committed.Text);
+        Assert.AreEqual("Внешнее обновление" + Environment.NewLine + "Новый текст", document.Content);
+        Assert.AreEqual(1, store.Writes);
+    }
+
+    [TestMethod]
+    public async Task FreeFormPositiveConfirmationCommitsWhenRouterIsConfident()
+    {
+        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Исходный текст" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        var responder = new ReviewRouterResponder("approve", 0.99);
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), responder);
+        var preview = await facade.HandleAsync(new AC.ChatTurn("Добавь в документ док 4 текст следующего содержания: Новый текст", true, null, []), CancellationToken.None);
+
+        var result = await facade.HandleAsync(new AC.ChatTurn("Да, этот вариант меня устраивает, применяй", false, preview.Pending, []), CancellationToken.None);
+
+        Assert.IsTrue(result.ChangedData, result.Text);
+        Assert.AreEqual("Исходный текст" + Environment.NewLine + "Новый текст", document.Content);
+        Assert.AreEqual(1, store.Writes);
+        Assert.Contains("Документ: «Doc 4»", responder.LastPreview);
+    }
+
+    [TestMethod]
+    public async Task FreeFormRejectionCancelsWithoutMutation()
+    {
+        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Исходный текст" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        var responder = new ReviewRouterResponder("reject", 0.98);
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), responder);
+        var preview = await facade.HandleAsync(new AC.ChatTurn("Добавь в документ док 4 текст следующего содержания: Новый текст", true, null, []), CancellationToken.None);
+
+        var result = await facade.HandleAsync(new AC.ChatTurn("Я передумал, оставь документ как был", false, preview.Pending, []), CancellationToken.None);
+
+        Assert.IsFalse(result.ChangedData);
+        Assert.IsNull(result.Pending);
+        Assert.AreEqual("Исходный текст", document.Content);
+        Assert.AreEqual(0, store.Writes);
+    }
+
+    [TestMethod]
+    public async Task OrdinaryKnowledgeQuestionUsesResponderWithoutMutation()
+    {
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument());
+        var responder = new CountingResponder();
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), responder);
+
+        var reply = await facade.HandleAsync(new AC.ChatTurn("Как лучше организовать заметки?", true, null, []), CancellationToken.None);
+
+        Assert.AreEqual("ответ модели", reply.Text);
+        Assert.AreEqual(1, responder.Calls);
+        Assert.AreEqual(0, store.Writes);
+        Assert.IsFalse(reply.ChangedData);
+    }
+
+    [TestMethod]
+    public async Task AmbiguousDocumentDestinationAsksClarificationWithoutMutation()
+    {
+        var first = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Первый" };
+        var second = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Второй" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [first, second] });
+        var responder = new CountingResponder();
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), responder);
+
+        var reply = await facade.HandleAsync(new AC.ChatTurn("Добавь в документ док 4 текст следующего содержания: Новый текст", true, null, []), CancellationToken.None);
+
+        Assert.IsTrue(reply.NeedsClarification);
+        Assert.IsNotNull(reply.Pending);
+        Assert.Contains("несколько документов", reply.Text);
+        Assert.AreEqual(0, store.Writes);
+        Assert.AreEqual(0, responder.Calls);
+        Assert.AreEqual("Первый", first.Content);
+        Assert.AreEqual("Второй", second.Content);
     }
 
     [TestMethod]
@@ -136,6 +310,21 @@ public sealed class ScopedChatTests
     private sealed class FixedResponder : AC.IChatResponder
     { public Task<string> ReplyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, CancellationToken cancellationToken) => Task.FromResult("обычный ответ"); }
 
+    private sealed class CountingResponder : AC.IChatResponder
+    {
+        public int Calls { get; private set; }
+        public Task<string> ReplyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, CancellationToken cancellationToken) { Calls++; return Task.FromResult("ответ модели"); }
+    }
+
+    private sealed class ReviewRouterResponder(string decision, double confidence) : AC.IChatResponder, IKnowledgeIntentRouter
+    {
+        public string LastPreview { get; private set; } = "";
+        public Task<string> ReplyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, CancellationToken cancellationToken) => Task.FromResult("ответ модели");
+        public Task<(string Status, KnowledgeIntent? Intent)> ClassifyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, CancellationToken cancellationToken) => Task.FromResult<(string, KnowledgeIntent?)>(("unavailable", null));
+        public Task<(string Status, string Decision, double Confidence)> ClassifyConfirmationAsync(string preview, string answer, CancellationToken cancellationToken)
+        { LastPreview = preview; return Task.FromResult<(string, string, double)>(("ok", decision, confidence)); }
+    }
+
     private sealed class HistoryFacade(AC.ChatScope scope) : AC.IChatConversationFacade
     {
         public AC.ChatScope Scope => scope;
@@ -147,7 +336,8 @@ public sealed class ScopedChatTests
     private sealed class InMemoryKnowledgeStore(KnowledgeBase.Api.Domain.KnowledgeDocument value) : KnowledgeBase.Api.Application.IKnowledgeStore
     {
         public KnowledgeBase.Api.Domain.KnowledgeDocument Value { get; private set; } = value;
+        public int Writes { get; private set; }
         public Task<KnowledgeBase.Api.Domain.KnowledgeDocument> ReadAsync(CancellationToken cancellationToken) => Task.FromResult(Value);
-        public Task WriteAsync(KnowledgeBase.Api.Domain.KnowledgeDocument document, CancellationToken cancellationToken) { Value = document; return Task.CompletedTask; }
+        public Task WriteAsync(KnowledgeBase.Api.Domain.KnowledgeDocument document, CancellationToken cancellationToken) { Value = document; Writes++; return Task.CompletedTask; }
     }
 }

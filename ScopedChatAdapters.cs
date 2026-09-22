@@ -24,7 +24,15 @@ sealed class TaskChatFacade(TaskChatService tasks) : IChatConversationFacade
 }
 
 /// <summary>Read-only conversation adapter. It has no dependency on either write API.</summary>
-sealed class ReadOnlyChatResponder : IChatResponder
+internal interface IKnowledgeIntentRouter
+{
+    Task<(string Status, KnowledgeIntent? Intent)> ClassifyAsync(string text, IReadOnlyList<ChatMessage>? history, CancellationToken ct);
+    Task<(string Status, string Decision, double Confidence)> ClassifyConfirmationAsync(string preview, string answer, CancellationToken ct);
+}
+
+internal sealed record KnowledgeIntent(string Kind, string? Reference, string? Title, string? Content, string? Section, string? Question);
+
+sealed class ReadOnlyChatResponder : IChatResponder, IKnowledgeIntentRouter
 {
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     public async Task<string> ReplyAsync(string text, IReadOnlyList<ChatMessage>? history, CancellationToken ct)
@@ -43,7 +51,88 @@ sealed class ReadOnlyChatResponder : IChatResponder
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch { /* Offline fallback below. */ }
         }
-        return $"Вы спросили: {text.Trim()}\n\nЯ могу ответить на вопрос или помочь с изменениями в текущем разделе дашборда.";
+        return "Сейчас не удалось подключиться к языковой модели, поэтому я не могу ответить на вопрос. Попробуйте позже.";
+    }
+
+    public async Task<(string Status, KnowledgeIntent? Intent)> ClassifyAsync(string text, IReadOnlyList<ChatMessage>? history, CancellationToken ct)
+    {
+        var key = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        if (string.IsNullOrWhiteSpace(key)) return ("unavailable", null);
+        var url = (Environment.GetEnvironmentVariable("OPENROUTER_URL") ?? "https://openrouter.ai/api/v1").TrimEnd('/') + "/chat/completions";
+        var model = Environment.GetEnvironmentVariable("OPENROUTER_MODEL") ?? "deepseek/deepseek-v4-flash-0731";
+        const string schema = "{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"conversation\",\"clarify\",\"create_document\",\"create_section\",\"append_document\",\"replace_document\",\"rename_document\",\"move_document\",\"delete_node\"]},\"reference\":{\"type\":[\"string\",\"null\"]},\"title\":{\"type\":[\"string\",\"null\"]},\"content\":{\"type\":[\"string\",\"null\"]},\"section\":{\"type\":[\"string\",\"null\"]},\"question\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"kind\",\"reference\",\"title\",\"content\",\"section\",\"question\"],\"additionalProperties\":false}";
+        using var schemaDocument = JsonDocument.Parse(schema);
+        var messages = new List<object>
+        {
+            new { role = "system", content = "Классифицируй сообщение относительно только этих операций Knowledge API: создать документ или раздел; дописать текст в существующий документ; заменить содержание; переименовать; переместить; удалить узел. Удаление не выполняется сразу: приложение покажет перечень и отдельно спросит подтверждение. Никаких URL, API-вызовов, других действий или утверждений о выполненной записи. Обычный вопрос/беседа = conversation. Действие вне списка = clarify. Если действие вероятно, но операция, адресат, содержание или раздел неясны/неоднозначны = clarify и короткий вопрос. Для адресата верни точное название или номер как reference. Для append/replace скопируй текст пользователя без перефразирования; если режим неясен, верни clarify. Верни объект строго по JSON-схеме." }
+        };
+        if (history is { Count: > 0 })
+            foreach (var item in history.TakeLast(8)) messages.Add(new { role = item.Role == "agent" ? "assistant" : "user", content = item.Text });
+        else messages.Add(new { role = "user", content = text });
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                model, temperature = 0, messages,
+                response_format = new { type = "json_schema", json_schema = new { name = "knowledge_intent", strict = true, schema = schemaDocument.RootElement } }
+            }), Encoding.UTF8, "application/json")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        try
+        {
+            using var response = await _http.SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode) return ("unavailable", null);
+            using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            var content = payload.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+            if (string.IsNullOrWhiteSpace(content)) return ("invalid", null);
+            using var json = JsonDocument.Parse(content);
+            var root = json.RootElement;
+            string[] keys = ["kind", "reference", "title", "content", "section", "question"];
+            if (root.ValueKind != JsonValueKind.Object || root.EnumerateObject().Count() != keys.Length || root.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != keys.Length || keys.Any(k => !root.TryGetProperty(k, out _))) return ("invalid", null);
+            string? Read(string name) => root.GetProperty(name).ValueKind == JsonValueKind.String ? root.GetProperty(name).GetString() : root.GetProperty(name).ValueKind == JsonValueKind.Null ? null : "!invalid!";
+            var intent = new KnowledgeIntent(Read("kind") ?? "", Read("reference"), Read("title"), Read("content"), Read("section"), Read("question"));
+            if (new[] { intent.Reference, intent.Title, intent.Content, intent.Section, intent.Question }.Any(v => v == "!invalid!") ||
+                intent.Kind is not ("conversation" or "clarify" or "create_document" or "create_section" or "append_document" or "replace_document" or "rename_document" or "move_document" or "delete_node")) return ("invalid", null);
+            return ("ok", intent);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return ("invalid", null); }
+    }
+
+    public async Task<(string Status, string Decision, double Confidence)> ClassifyConfirmationAsync(string preview, string answer, CancellationToken ct)
+    {
+        var key = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        if (string.IsNullOrWhiteSpace(key)) return ("unavailable", "unclear", 0);
+        var url = (Environment.GetEnvironmentVariable("OPENROUTER_URL") ?? "https://openrouter.ai/api/v1").TrimEnd('/') + "/chat/completions";
+        var model = Environment.GetEnvironmentVariable("OPENROUTER_MODEL") ?? "deepseek/deepseek-v4-flash-0731";
+        const string schema = "{\"type\":\"object\",\"properties\":{\"decision\":{\"type\":\"string\",\"enum\":[\"approve\",\"reject\",\"unclear\"]},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1}},\"required\":[\"decision\",\"confidence\"],\"additionalProperties\":false}";
+        using var schemaDocument = JsonDocument.Parse(schema);
+        var messages = new object[]
+        {
+            new { role = "system", content = "Классифицируй только ответ пользователя на показанный предпросмотр изменения. approve разрешён только если пользователь явно и недвусмысленно разрешает выполнить именно этот предпросмотр. reject — если явно отказывается, отменяет или просит оставить данные без изменения. Вопрос, условие, сомнение, несвязанный ответ и любое неясное сообщение = unclear. Не трактуй согласие на обсуждение как разрешение на запись. Confidence отражает уверенность в выбранном решении от 0 до 1; при малейшей неоднозначности выбери unclear и низкую уверенность. Верни JSON по схеме." },
+            new { role = "user", content = $"Предпросмотр:\n{preview}\n\nОтвет пользователя:\n{answer}" }
+        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new { model, temperature = 0, messages, response_format = new { type = "json_schema", json_schema = new { name = "review_confirmation", strict = true, schema = schemaDocument.RootElement } } }), Encoding.UTF8, "application/json")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        try
+        {
+            using var response = await _http.SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode) return ("unavailable", "unclear", 0);
+            using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            var content = payload.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+            if (string.IsNullOrWhiteSpace(content)) return ("invalid", "unclear", 0);
+            using var json = JsonDocument.Parse(content);
+            var root = json.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || root.EnumerateObject().Count() != 2 || root.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != 2 || !root.TryGetProperty("decision", out var decision) || !root.TryGetProperty("confidence", out var confidence) || decision.ValueKind != JsonValueKind.String || confidence.ValueKind != JsonValueKind.Number || !confidence.TryGetDouble(out var value) || value is < 0 or > 1)
+                return ("invalid", "unclear", 0);
+            var choice = decision.GetString();
+            return choice is "approve" or "reject" or "unclear" ? ("ok", choice, value) : ("invalid", "unclear", 0);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return ("invalid", "unclear", 0); }
     }
 
 }
@@ -55,44 +144,319 @@ sealed class KnowledgeChatFacade(KnowledgeService knowledge, IChatResponder resp
 
     public async Task<ChatReply> HandleAsync(ChatTurn turn, CancellationToken ct)
     {
-        var plan = KnowledgeCommandPlanner.Continue(turn.Pending, turn.Text) ?? KnowledgeCommandPlanner.Plan(turn.Text);
+        if (KnowledgeCommandPlanner.ReadPending(turn.Pending) is { Missing: "approval" } review)
+        {
+            var confirmation = KnowledgeCommandPlanner.Confirmation(turn.Text);
+            if (responder is IKnowledgeIntentRouter reviewRouter)
+            {
+                var classified = await reviewRouter.ClassifyConfirmationAsync(review.Preview ?? "", turn.Text, ct);
+                confirmation = classified.Status == "ok" && classified.Confidence >= 0.95
+                    ? classified.Decision == "approve" ? 1 : classified.Decision == "reject" ? 0 : -1
+                    : classified.Status == "unavailable" ? confirmation : -1;
+            }
+            if (confirmation == 0) return new ChatReply("Изменение отменено. Данные не менялись.", false);
+            if (confirmation < 0) return Preview(review, "Не распознал подтверждение. Ответьте однозначно: разрешить запись этого предпросмотра или отменить.");
+            return await CommitAsync(review, ct);
+        }
+        var pending = KnowledgeCommandPlanner.Continue(turn.Pending, turn.Text);
+        KnowledgeCommand plan;
+        if (pending is { Missing: not "classification" }) plan = pending;
+        else if (responder is IKnowledgeIntentRouter router)
+        {
+            var (status, intent) = await router.ClassifyAsync(turn.Text, turn.History, ct);
+            if (status == "invalid") return Clarify(new(KnowledgeCommandKind.None, Missing: "classification"), "Не удалось надёжно распознать намерение. Сформулируйте действие и документ точнее.");
+            if (status == "ok" && intent is not null)
+            {
+                if (intent.Kind == "conversation") return new ChatReply(await responder.ReplyAsync(turn.Text, turn.History, ct), false);
+                if (intent.Kind == "clarify") return Clarify(new(KnowledgeCommandKind.None, Missing: "classification"), string.IsNullOrWhiteSpace(intent.Question) ? "Уточните, какое действие и с каким документом выполнить." : intent.Question);
+                plan = KnowledgeCommandPlanner.FromIntent(intent);
+                if (plan.Kind is KnowledgeCommandKind.AppendContent or KnowledgeCommandKind.UpdateContentByReference &&
+                    plan.Content is { Length: > 0 } content && !turn.Text.Contains(content, StringComparison.Ordinal))
+                    return Clarify(new(KnowledgeCommandKind.None, Missing: "classification"), "Не удалось точно выделить исходный текст для записи. Повторите его явно после слов «текст следующего содержания».");
+                if (KnowledgeCommandPlanner.HasAmbiguousPlacementVerb(turn.Text) && (plan.Kind is KnowledgeCommandKind.AppendContent or KnowledgeCommandKind.UpdateContentByReference))
+                    plan = plan with { Kind = KnowledgeCommandKind.UpdateContentByReference, Missing = "operation", NeedsOperationChoice = true };
+            }
+            else plan = KnowledgeCommandPlanner.Plan(turn.Text);
+        }
+        else plan = pending ?? KnowledgeCommandPlanner.Plan(turn.Text);
         if (plan.Kind == KnowledgeCommandKind.None) return new ChatReply(await responder.ReplyAsync(turn.Text, turn.History, ct), false);
         if (plan.Missing is not null) return Clarify(plan, MissingMessage(plan.Missing));
+
+        if (plan.Kind is KnowledgeCommandKind.AppendContent or KnowledgeCommandKind.UpdateContentByReference)
+        {
+            var matches = await FindDocumentsAsync(plan.DocumentReference!, ct);
+            if (matches.Count == 0) return Clarify(plan with { Missing = "document" }, $"Документ «{plan.DocumentReference}» не найден. Укажите точное название или номер существующего документа.");
+            if (matches.Count > 1) return Clarify(plan with { Missing = "document" }, $"Нашлось несколько документов «{plan.DocumentReference}». Уточните название или номер.");
+            var document = await knowledge.GetDocumentAsync(matches[0].Id, ct);
+            if (document is null) return new ChatReply("Документ исчез из каталога до чтения; изменение не выполнено.", true);
+            var content = plan.Kind == KnowledgeCommandKind.AppendContent
+                ? string.IsNullOrEmpty(document.Content) ? plan.Content : document.Content + Environment.NewLine + plan.Content
+                : plan.Content;
+            var path = await DocumentPathAsync(document.Id, ct);
+            var operation = plan.Kind == KnowledgeCommandKind.AppendContent ? "добавить" : "заменить содержание";
+            return Preview(plan with { NodeId = document.Id, ResultContent = content, OriginalContent = document.Content, ExpectedTitle = document.Title, TargetPath = path }, $"Документ: «{document.Title}»\nПуть: {path}\nОперация: {operation}\nПолный текст после изменения:\n{content}");
+        }
+
+        if (plan.Kind is KnowledgeCommandKind.RenameByReference or KnowledgeCommandKind.MoveByReference)
+        {
+            var matches = await FindDocumentsAsync(plan.DocumentReference!, ct);
+            if (matches.Count != 1) return Clarify(plan with { Missing = "document" }, matches.Count == 0 ? $"Документ «{plan.DocumentReference}» не найден. Укажите точный документ." : $"Нашлось несколько документов «{plan.DocumentReference}». Уточните название или номер.");
+            var target = matches[0];
+            if (plan.Kind == KnowledgeCommandKind.RenameByReference)
+            {
+                return Preview(plan with { NodeId = target.Id, ExpectedTitle = target.Title, TargetPath = await DocumentPathAsync(target.Id, ct) }, $"Документ: «{target.Title}»\nПуть: {await DocumentPathAsync(target.Id, ct)}\nОперация: переименовать в «{plan.Title}»");
+            }
+            var section = await FindSectionAsync(plan.SectionTitle!, ct);
+            if (section is null) return Clarify(plan with { Missing = "section" }, $"Раздел «{plan.SectionTitle}» не найден или неоднозначен. Укажите точный существующий раздел.");
+            var destination = await SectionPathAsync(section.Value, ct);
+            return Preview(plan with { Kind = KnowledgeCommandKind.MoveByReference, NodeId = target.Id, ParentId = section, TargetPath = await DocumentPathAsync(target.Id, ct), ExpectedTitle = target.Title, DestinationPath = destination }, $"Документ: «{target.Title}»\nТекущий путь: {await DocumentPathAsync(target.Id, ct)}\nОперация: переместить в «{plan.SectionTitle}»\nНовый путь: {destination}");
+        }
 
         switch (plan.Kind)
         {
             case KnowledgeCommandKind.CreateDocument:
                 var parent = plan.SectionTitle is null ? null : await FindSectionAsync(plan.SectionTitle, ct);
                 if (plan.SectionTitle is not null && parent is null) return Clarify(plan with { SectionTitle = null, Missing = "section" }, $"Раздел «{plan.SectionTitle}» не найден. Укажите существующий раздел.");
-                var created = await knowledge.CreateAsync("document", plan.Title!, plan.Content ?? "", parent, ct);
-                return created.Node is null ? new ChatReply(created.Error ?? "Не удалось создать документ.", true) : new ChatReply($"Документ «{created.Node.Title}» создан.", false, true);
+                var createPath = parent is null ? "Корень базы знаний" : await SectionPathAsync(parent.Value, ct);
+                return Preview(plan with { ParentId = parent, TargetPath = createPath }, $"Операция: создать документ «{plan.Title}»\nПуть: {createPath}\nНачальное содержание:\n{plan.Content ?? "(пусто)"}");
+            case KnowledgeCommandKind.CreateSection:
+                var sectionParent = plan.SectionTitle is null ? null : await FindSectionAsync(plan.SectionTitle, ct);
+                if (plan.SectionTitle is not null && sectionParent is null) return Clarify(plan with { Missing = "section" }, $"Родительский раздел «{plan.SectionTitle}» не найден или неоднозначен.");
+                var sectionPath = sectionParent is null ? "Корень базы знаний" : await SectionPathAsync(sectionParent.Value, ct);
+                return Preview(plan with { ParentId = sectionParent, TargetPath = sectionPath }, $"Операция: создать раздел «{plan.Title}»\nПуть: {sectionPath}");
             case KnowledgeCommandKind.Rename:
-                var rename = await knowledge.RenameAsync(plan.NodeId!.Value, plan.Title, ct);
-                return rename is null ? new ChatReply("Название изменено.", false, true) : new ChatReply(rename, true);
+                var renameNode = (await knowledge.GetTreeAsync(ct)).SelectMany(Flatten).SingleOrDefault(n => n.Id == plan.NodeId);
+                if (renameNode is null) return new ChatReply("Узел не найден; изменение не выполнено.", true);
+                return Preview(plan with { ExpectedTitle = renameNode.Title, TargetPath = await DocumentPathAsync(plan.NodeId!.Value, ct) }, $"Узел: «{renameNode.Title}»\nПуть: {await DocumentPathAsync(plan.NodeId.Value, ct)}\nОперация: переименовать в «{plan.Title}»");
             case KnowledgeCommandKind.UpdateContent:
-                var content = await knowledge.UpdateContentAsync(plan.NodeId!.Value, plan.Content, ct);
-                return content is null ? new ChatReply("Содержание документа обновлено.", false, true) : new ChatReply(content, true);
+                var oldDocument = await knowledge.GetDocumentAsync(plan.NodeId!.Value, ct);
+                if (oldDocument is null) return new ChatReply("Документ не найден; изменение не выполнено.", true);
+                return Preview(plan with { OriginalContent = oldDocument.Content, ExpectedTitle = oldDocument.Title, ResultContent = plan.Content, TargetPath = await DocumentPathAsync(plan.NodeId.Value, ct) }, $"Документ: «{oldDocument.Title}»\nПуть: {await DocumentPathAsync(plan.NodeId.Value, ct)}\nОперация: заменить содержание\nПолный текст после изменения:\n{plan.Content}");
             case KnowledgeCommandKind.Move:
                 var target = await FindSectionAsync(plan.SectionTitle!, ct);
                 if (target is null) return Clarify(plan with { SectionTitle = null, Missing = "section" }, $"Раздел «{plan.SectionTitle}» не найден. Укажите существующий раздел.");
-                var move = await knowledge.MoveAsync(plan.NodeId!.Value, target, 0, ct);
-                return move is null ? new ChatReply("Документ перемещён.", false, true) : new ChatReply(move, true);
+                return Preview(plan with { ParentId = target, TargetPath = await DocumentPathAsync(plan.NodeId!.Value, ct), DestinationPath = await SectionPathAsync(target.Value, ct) }, $"Узел: {plan.NodeId}\nТекущий путь: {await DocumentPathAsync(plan.NodeId.Value, ct)}\nНовый путь: {await SectionPathAsync(target.Value, ct)}");
+            case KnowledgeCommandKind.DeleteByReference:
+                var nodeMatches = await FindNodesAsync(plan.DocumentReference!, ct);
+                if (nodeMatches.Count != 1) return Clarify(plan with { Missing = "document" }, nodeMatches.Count == 0 ? "Узел не найден. Укажите точное название или номер." : "Такому адресу соответствуют несколько узлов. Уточните адрес.");
+                var deleting = nodeMatches[0];
+                var descendants = Descendants(deleting, await knowledge.GetTreeAsync(ct));
+                var deletedNames = string.Join("\n", descendants.Select(n => $"• {n.Title} ({n.Kind})"));
+                return Preview(plan with { NodeId = deleting.Id, ExpectedTitle = deleting.Title, TargetPath = await DocumentPathAsync(deleting.Id, ct), TargetSnapshot = Snapshot(descendants) }, $"Операция: удалить узел «{deleting.Title}» и вложенные элементы\nПуть: {await DocumentPathAsync(deleting.Id, ct)}\nБудут удалены:\n{deletedNames}");
             default: return new ChatReply("Не удалось определить команду базы знаний.", true);
         }
     }
 
     private static ChatReply Clarify(KnowledgeCommand command, string message) => new(message, true, false, new ChatPending("knowledge-command", JsonSerializer.Serialize(command)));
-    private static string MissingMessage(string missing) => missing switch { "title" => "Укажите название документа.", "section" => "Укажите существующий раздел.", "id" => "Укажите идентификатор документа.", "content" => "Укажите новое содержание документа.", _ => "Укажите недостающие данные команды." };
-    private async Task<Guid?> FindSectionAsync(string title, CancellationToken ct) => (await knowledge.GetTreeAsync(ct)).SelectMany(Flatten).FirstOrDefault(x => x.Kind == "section" && x.Title.Equals(title, StringComparison.OrdinalIgnoreCase))?.Id;
+    private static ChatReply Preview(KnowledgeCommand command, string text)
+    {
+        var previous = command.Missing == "approval" ? command.Preview : null;
+        var preview = previous ?? text;
+        var pending = command with { Missing = "approval", Preview = preview };
+        var message = previous is null ? $"Предпросмотр\n{preview}\n\nПодтвердить запись? Ответьте «да» или «нет»." : $"Предпросмотр\n{preview}\n\n{text}\nОтветьте «да» для записи или «нет» для отмены.";
+        return new ChatReply(message, true, false, new ChatPending("knowledge-command", JsonSerializer.Serialize(pending)));
+    }
+
+    private async Task<ChatReply> CommitAsync(KnowledgeCommand command, CancellationToken ct)
+    {
+        var refreshed = await RefreshStalePreviewAsync(command, ct);
+        if (refreshed is not null) return refreshed;
+        string? error = null;
+        Guid? createdId = null;
+        switch (command.Kind)
+        {
+            case KnowledgeCommandKind.CreateDocument:
+            case KnowledgeCommandKind.CreateSection:
+                var created = await knowledge.CreateAsync(command.Kind == KnowledgeCommandKind.CreateSection ? "section" : "document", command.Title, command.Content, command.ParentId, ct);
+                error = created.Error;
+                createdId = created.Node?.Id;
+                break;
+            case KnowledgeCommandKind.AppendContent:
+            case KnowledgeCommandKind.UpdateContentByReference:
+            case KnowledgeCommandKind.UpdateContent:
+                error = await knowledge.UpdateContentAsync(command.NodeId!.Value, command.ResultContent, ct);
+                break;
+            case KnowledgeCommandKind.RenameByReference:
+            case KnowledgeCommandKind.Rename:
+                error = await knowledge.RenameAsync(command.NodeId!.Value, command.Title, ct);
+                break;
+            case KnowledgeCommandKind.MoveByReference:
+            case KnowledgeCommandKind.Move:
+                error = await knowledge.MoveAsync(command.NodeId!.Value, command.ParentId, 0, ct);
+                break;
+            case KnowledgeCommandKind.DeleteByReference:
+                error = await knowledge.DeleteAsync(command.NodeId!.Value, ct);
+                break;
+            default:
+                return new ChatReply("Не удалось подтвердить тип действия; данные не менялись.", true);
+        }
+        if (error is not null) return new ChatReply($"Не удалось выполнить подтверждённое действие: {error}", true);
+        var tree = (await knowledge.GetTreeAsync(ct)).SelectMany(Flatten).ToList();
+        var verified = command.Kind switch
+        {
+            KnowledgeCommandKind.CreateDocument or KnowledgeCommandKind.CreateSection => createdId is not null && tree.Any(n => n.Id == createdId && n.Title == command.Title && n.ParentId == command.ParentId),
+            KnowledgeCommandKind.AppendContent or KnowledgeCommandKind.UpdateContentByReference or KnowledgeCommandKind.UpdateContent => (await knowledge.GetDocumentAsync(command.NodeId!.Value, ct))?.Content == command.ResultContent,
+            KnowledgeCommandKind.RenameByReference or KnowledgeCommandKind.Rename => tree.Any(n => n.Id == command.NodeId && n.Title == command.Title),
+            KnowledgeCommandKind.MoveByReference or KnowledgeCommandKind.Move => tree.Any(n => n.Id == command.NodeId && n.ParentId == command.ParentId),
+            KnowledgeCommandKind.DeleteByReference => tree.All(n => n.Id != command.NodeId),
+            _ => false
+        };
+        return verified
+            ? new ChatReply(command.Kind == KnowledgeCommandKind.DeleteByReference ? "Удаление выполнено и проверено." : "Изменение записано и проверено чтением базы знаний.", false, true)
+            : new ChatReply("Операция отправлена, но результат не подтвердился чтением базы знаний. Проверьте данные вручную.", true);
+    }
+
+    private async Task<ChatReply?> RefreshStalePreviewAsync(KnowledgeCommand command, CancellationToken ct)
+    {
+        var nodes = (await knowledge.GetTreeAsync(ct)).SelectMany(Flatten).ToList();
+        if (command.Kind is KnowledgeCommandKind.CreateDocument or KnowledgeCommandKind.CreateSection)
+        {
+            var currentParentPath = command.ParentId is null ? "Корень базы знаний" : nodes.Any(n => n.Id == command.ParentId && n.Kind == "section") ? await SectionPathAsync(command.ParentId.Value, ct) : null;
+            if (currentParentPath is null) return Clarify(command with { Missing = "section" }, "Родительский раздел исчез до подтверждения. Укажите существующий раздел.");
+            if (currentParentPath != command.TargetPath)
+                return Refreshed(command with { TargetPath = currentParentPath }, $"Операция: создать {(command.Kind == KnowledgeCommandKind.CreateSection ? "раздел" : "документ")} «{command.Title}»\nПуть: {currentParentPath}\nНачальное содержание:\n{command.Content ?? "(пусто)"}");
+            return null;
+        }
+
+        var node = nodes.SingleOrDefault(n => n.Id == command.NodeId);
+        if (node is null) return Clarify(command with { Missing = "document" }, "Целевой узел был удалён до подтверждения. Запись не выполнена; укажите актуальную цель.");
+        var currentPath = await DocumentPathAsync(node.Id, ct);
+        if (command.Kind is KnowledgeCommandKind.AppendContent or KnowledgeCommandKind.UpdateContentByReference or KnowledgeCommandKind.UpdateContent)
+        {
+            var current = await knowledge.GetDocumentAsync(node.Id, ct);
+            if (current is null) return Clarify(command with { Missing = "document" }, "Целевой документ был удалён до подтверждения. Запись не выполнена; укажите актуальную цель.");
+            if (current.Title == command.ExpectedTitle && currentPath == command.TargetPath && current.Content == command.OriginalContent) return null;
+            var result = command.Kind == KnowledgeCommandKind.AppendContent
+                ? string.IsNullOrEmpty(current.Content) ? command.Content : current.Content + Environment.NewLine + command.Content
+                : command.ResultContent;
+            var operation = command.Kind == KnowledgeCommandKind.AppendContent ? "добавить" : "заменить содержание";
+            return Refreshed(command with { ExpectedTitle = current.Title, TargetPath = currentPath, OriginalContent = current.Content, ResultContent = result }, $"Документ: «{current.Title}»\nПуть: {currentPath}\nОперация: {operation}\nПолный текст после изменения:\n{result}");
+        }
+        if (command.Kind is KnowledgeCommandKind.Rename or KnowledgeCommandKind.RenameByReference)
+        {
+            if (node.Title == command.ExpectedTitle && currentPath == command.TargetPath) return null;
+            return Refreshed(command with { ExpectedTitle = node.Title, TargetPath = currentPath }, $"Узел: «{node.Title}»\nПуть: {currentPath}\nОперация: переименовать в «{command.Title}»");
+        }
+        if (command.Kind is KnowledgeCommandKind.Move or KnowledgeCommandKind.MoveByReference)
+        {
+            var destination = command.ParentId is null ? "Корень базы знаний" : nodes.Any(n => n.Id == command.ParentId && n.Kind == "section") ? await SectionPathAsync(command.ParentId.Value, ct) : null;
+            if (destination is null) return Clarify(command with { Missing = "section" }, "Раздел назначения исчез до подтверждения. Укажите существующий раздел.");
+            if (node.Title == command.ExpectedTitle && currentPath == command.TargetPath && destination == command.DestinationPath) return null;
+            return Refreshed(command with { ExpectedTitle = node.Title, TargetPath = currentPath, DestinationPath = destination }, $"Узел: «{node.Title}»\nТекущий путь: {currentPath}\nНовый путь: {destination}");
+        }
+        if (command.Kind == KnowledgeCommandKind.DeleteByReference)
+        {
+            var descendants = Descendants(node, nodes);
+            var snapshot = Snapshot(descendants);
+            if (node.Title == command.ExpectedTitle && currentPath == command.TargetPath && snapshot == command.TargetSnapshot) return null;
+            var list = string.Join("\n", descendants.Select(n => $"• {n.Title} ({n.Kind})"));
+            return Refreshed(command with { ExpectedTitle = node.Title, TargetPath = currentPath, TargetSnapshot = snapshot }, $"Операция: удалить узел «{node.Title}» и вложенные элементы\nПуть: {currentPath}\nБудут удалены:\n{list}");
+        }
+        return null;
+    }
+
+    private static ChatReply Refreshed(KnowledgeCommand command, string text)
+    {
+        var preview = Preview(command with { Missing = null, Preview = null }, text);
+        return preview with { Text = "Данные изменились после предпросмотра. Старый предпросмотр отменён.\n\n" + preview.Text };
+    }
+
+    private static string Snapshot(IEnumerable<KnowledgeNodeDto> nodes) => string.Join("|", nodes.Select(n => $"{n.Id:N}:{n.Title}:{n.Kind}:{n.ParentId}:{n.UpdatedAt.UtcDateTime.Ticks}").Order(StringComparer.Ordinal));
+
+    private async Task<string> DocumentPathAsync(Guid id, CancellationToken ct)
+    {
+        var nodes = (await knowledge.GetTreeAsync(ct)).SelectMany(Flatten).ToList();
+        var node = nodes.FirstOrDefault(x => x.Id == id);
+        if (node is null) return "(узел не найден)";
+        var names = new List<string> { node.Title };
+        while (node.ParentId is not null)
+        {
+            node = nodes.FirstOrDefault(x => x.Id == node.ParentId.Value);
+            if (node is null) break;
+            names.Add(node.Title);
+        }
+        names.Reverse();
+        return string.Join(" / ", names);
+    }
+
+    private async Task<string> SectionPathAsync(Guid id, CancellationToken ct) => await DocumentPathAsync(id, ct);
+
+    private async Task<List<KnowledgeNodeDto>> FindNodesAsync(string reference, CancellationToken ct)
+    {
+        var nodes = (await knowledge.GetTreeAsync(ct)).SelectMany(Flatten).ToList();
+        var normalized = NormalizeReference(reference);
+        return nodes.Where(x => x.Title.Equals(normalized, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    private static List<KnowledgeNodeDto> Descendants(KnowledgeNodeDto root, IReadOnlyList<KnowledgeNodeDto> all)
+    {
+        var result = new List<KnowledgeNodeDto> { root };
+        var parents = new HashSet<Guid> { root.Id };
+        for (var i = 0; i < result.Count; i++)
+            foreach (var child in all.Where(n => n.ParentId == result[i].Id)) result.Add(child);
+        return result;
+    }
+
+    private static string MissingMessage(string missing) => missing switch { "title" => "Укажите название документа.", "section" => "Укажите существующий раздел.", "id" => "Укажите идентификатор документа.", "content" => "Укажите новое содержание документа.", "document" => "Уточните документ по точному названию или номеру.", "operation" => "Уточните: добавить текст к существующему содержанию или заменить его?", _ => "Укажите недостающие данные команды." };
+    private async Task<Guid?> FindSectionAsync(string title, CancellationToken ct)
+    {
+        var matches = (await knowledge.GetTreeAsync(ct)).SelectMany(Flatten).Where(x => x.Kind == "section" && x.Title.Equals(title, StringComparison.OrdinalIgnoreCase)).ToList();
+        return matches.Count == 1 ? matches[0].Id : null;
+    }
+    private async Task<List<KnowledgeNodeDto>> FindDocumentsAsync(string reference, CancellationToken ct)
+    {
+        var nodes = (await knowledge.GetTreeAsync(ct)).SelectMany(Flatten).Where(x => x.Kind == "document").ToList();
+        var normalized = NormalizeReference(reference);
+        return nodes.Where(x => x.Title.Equals(normalized, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+    private static string NormalizeReference(string reference)
+    {
+        var normalized = reference.Trim().Trim('«', '»', '"', '.', ',', ':');
+        if (int.TryParse(normalized, out var number)) return $"Doc {number}";
+        foreach (var prefix in new[] { "документ №", "документ ", "док №", "док " })
+            if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && int.TryParse(normalized[prefix.Length..].Trim(), out number)) return $"Doc {number}";
+        return normalized;
+    }
     private static IEnumerable<KnowledgeNodeDto> Flatten(KnowledgeNodeDto node) { yield return node; if (node.Children is not null) foreach (var child in node.Children.SelectMany(Flatten)) yield return child; }
 }
 
-internal enum KnowledgeCommandKind { None, CreateDocument, Rename, UpdateContent, Move }
-internal sealed record KnowledgeCommand(KnowledgeCommandKind Kind, Guid? NodeId = null, string? Title = null, string? Content = null, string? SectionTitle = null, string? Missing = null);
+internal enum KnowledgeCommandKind { None, CreateDocument, CreateSection, Rename, UpdateContent, Move, AppendContent, UpdateContentByReference, RenameByReference, MoveByReference, DeleteByReference }
+internal sealed record KnowledgeCommand(KnowledgeCommandKind Kind, Guid? NodeId = null, string? Title = null, string? Content = null, string? SectionTitle = null, string? Missing = null, string? DocumentReference = null, bool NeedsOperationChoice = false, Guid? ParentId = null, string? ResultContent = null, string? TargetPath = null, string? Preview = null, string? OriginalContent = null, string? ExpectedTitle = null, string? DestinationPath = null, string? TargetSnapshot = null);
 
 /// <summary>Conservative command planner: only imperatives mutate; structured pending state completes a prior command safely.</summary>
 internal static class KnowledgeCommandPlanner
 {
+    public static KnowledgeCommand? ReadPending(ChatPending? pending)
+    {
+        if (pending?.Kind != "knowledge-command") return null;
+        try { return JsonSerializer.Deserialize<KnowledgeCommand>(pending.Data); } catch { return null; }
+    }
+
+    public static int Confirmation(string text)
+    {
+        var cleaned = new string(text.ToLowerInvariant().Select(ch => char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch) ? ch : ' ').ToArray());
+        var words = cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var normalized = string.Join(' ', words);
+        if (normalized is "да" or "да подтверждаю" or "подтверждаю" or "согласен" or "согласна" or "выполняй" or "выполни" or "делай" or "ок" or "окей" or "yes" or "confirm" ||
+            words.Length > 0 && words[0] is ("да" or "yes") && words.Skip(1).All(w => new[] { "подтверждаю", "подтвердить", "согласен", "согласна", "выполняй", "выполни", "делай", "ок", "окей", "пожалуйста" }.Contains(w))) return 1;
+        if (normalized is "нет" or "нет отмена" or "нет не надо" or "отмена" or "отменить" or "не надо" or "не выполняй" or "не делай" or "отклоняю" or "no" or "cancel" || words.Length > 0 && words[0] is ("нет" or "no")) return 0;
+        return -1;
+    }
+
+    public static bool HasAmbiguousPlacementVerb(string text) => StartsWithAny(text.Trim().ToLowerInvariant(), "помести", "поместить", "положи", "положить", "запиши в документ", "внеси в документ");
+
+    public static KnowledgeCommand FromIntent(KnowledgeIntent intent) => intent.Kind switch
+    {
+        "create_document" => new(KnowledgeCommandKind.CreateDocument, Title: intent.Title, Content: intent.Content, SectionTitle: intent.Section, Missing: string.IsNullOrWhiteSpace(intent.Title) ? "title" : null),
+        "create_section" => new(KnowledgeCommandKind.CreateSection, Title: intent.Title, SectionTitle: intent.Section, Missing: string.IsNullOrWhiteSpace(intent.Title) ? "title" : null),
+        "append_document" => new(KnowledgeCommandKind.AppendContent, Content: intent.Content, DocumentReference: intent.Reference, Missing: string.IsNullOrWhiteSpace(intent.Reference) ? "document" : string.IsNullOrWhiteSpace(intent.Content) ? "content" : null),
+        "replace_document" => new(KnowledgeCommandKind.UpdateContentByReference, Content: intent.Content, DocumentReference: intent.Reference, Missing: string.IsNullOrWhiteSpace(intent.Reference) ? "document" : string.IsNullOrWhiteSpace(intent.Content) ? "content" : null),
+        "rename_document" => new(KnowledgeCommandKind.RenameByReference, Title: intent.Title, DocumentReference: intent.Reference, Missing: string.IsNullOrWhiteSpace(intent.Reference) ? "document" : string.IsNullOrWhiteSpace(intent.Title) ? "title" : null),
+        "move_document" => new(KnowledgeCommandKind.MoveByReference, DocumentReference: intent.Reference, SectionTitle: intent.Section, Missing: string.IsNullOrWhiteSpace(intent.Reference) ? "document" : string.IsNullOrWhiteSpace(intent.Section) ? "section" : null),
+        "delete_node" => new(KnowledgeCommandKind.DeleteByReference, DocumentReference: intent.Reference, Missing: string.IsNullOrWhiteSpace(intent.Reference) ? "document" : null),
+        _ => new(KnowledgeCommandKind.None)
+    };
+
     public static KnowledgeCommand? Continue(ChatPending? pending, string answer)
     {
         if (pending?.Kind != "knowledge-command") return null;
@@ -104,10 +468,13 @@ internal static class KnowledgeCommandPlanner
         {
             "title" => command with { Title = value, Missing = null },
             "section" => command with { SectionTitle = value, Missing = null },
-            "content" => command with { Content = value, Missing = null },
+            "content" => command with { Content = value, Missing = command.NeedsOperationChoice ? "operation" : null },
+            "document" => command with { DocumentReference = value, Missing = command.NeedsOperationChoice ? "operation" : null },
+            "operation" when value.Contains("добав", StringComparison.OrdinalIgnoreCase) => command with { Kind = KnowledgeCommandKind.AppendContent, Missing = null },
+            "operation" when value.Contains("замен", StringComparison.OrdinalIgnoreCase) || value.Contains("обнов", StringComparison.OrdinalIgnoreCase) || value.Contains("перезапис", StringComparison.OrdinalIgnoreCase) => command with { Missing = null },
             "id" when TryId(value, out var id) => command with { NodeId = id, Missing = null },
             "id" => command,
-            _ => null
+            _ => command
         };
     }
 
@@ -115,6 +482,24 @@ internal static class KnowledgeCommandPlanner
     {
         var text = source.Trim(); var lower = text.ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(text) || text.EndsWith('?')) return new(KnowledgeCommandKind.None);
+        if (StartsWithAny(lower, "добавь в документ", "добавить в документ", "помести в документ", "поместить в документ", "измени документ", "измени содержание документа", "обнови документ", "обновить документ", "замени содержание документа")) return ContentCommand(text, lower);
+        if (StartsWithAny(lower, "добавь", "добавить", "измени", "изменить", "помести", "поместить", "обнови", "обновить", "замени", "заменить") && lower.Contains("док"))
+            return new(KnowledgeCommandKind.UpdateContentByReference, Missing: "document");
+        if (StartsWithAny(lower, "создай раздел", "создать раздел", "добавь раздел", "добавить раздел"))
+        {
+            var marker = lower.IndexOf("раздел", StringComparison.Ordinal) + "раздел".Length;
+            var rest = text[marker..].Trim(' ', ':', '-', '«', '»');
+            var parentAt = FindPhrase(rest, "в разделе") ?? FindPhrase(rest, "в раздел");
+            var title = TrimValue(rest[..(parentAt?.Index ?? rest.Length)]);
+            var parentTitle = parentAt is null ? null : TrimValue(rest[parentAt.Value.End..]);
+            return new(KnowledgeCommandKind.CreateSection, Title: title, SectionTitle: parentTitle, Missing: string.IsNullOrWhiteSpace(title) ? "title" : null);
+        }
+        if (StartsWithAny(lower, "удали документ", "удалить документ", "удали раздел", "удалить раздел"))
+        {
+            var marker = lower.Contains("документ") ? "документ" : "раздел";
+            var reference = TrimValue(text[(lower.IndexOf(marker, StringComparison.Ordinal) + marker.Length)..]);
+            return new(KnowledgeCommandKind.DeleteByReference, DocumentReference: reference, Missing: string.IsNullOrWhiteSpace(reference) ? "document" : null);
+        }
         if (StartsWithAny(lower, "создай документ", "создать документ", "добавь документ", "добавить документ")) return CreateDocument(text);
         if (StartsWithAny(lower, "переименуй", "переименовать")) return NamedCommand(text, KnowledgeCommandKind.Rename, "название");
         if (StartsWithAny(lower, "обнови содержание", "измени содержание", "обновить содержание", "изменить содержание")) return NamedCommand(text, KnowledgeCommandKind.UpdateContent, "содержание");
@@ -125,6 +510,23 @@ internal static class KnowledgeCommandPlanner
             return new(KnowledgeCommandKind.Move, id, SectionTitle: section, Missing: string.IsNullOrWhiteSpace(section) ? "section" : null);
         }
         return new(KnowledgeCommandKind.None);
+    }
+
+    private static KnowledgeCommand ContentCommand(string text, string lower)
+    {
+        var verb = lower.StartsWith("добав") ? KnowledgeCommandKind.AppendContent : KnowledgeCommandKind.UpdateContentByReference;
+        var marker = lower.IndexOf("документ", StringComparison.Ordinal);
+        var rest = text[(marker + "документ".Length)..].Trim(' ', ':', '-', '«', '»');
+        if (rest.StartsWith("док ", StringComparison.OrdinalIgnoreCase)) rest = rest[4..].Trim();
+        else if (rest.StartsWith("№", StringComparison.Ordinal)) rest = rest[1..].Trim();
+        var contentAt = new[] { "текст следующего содержания", "следующего содержания", "содержание:", "текст:" }
+            .Select(phrase => (phrase, index: rest.IndexOf(phrase, StringComparison.OrdinalIgnoreCase)))
+            .Where(x => x.index >= 0).OrderBy(x => x.index).FirstOrDefault();
+        var reference = contentAt.phrase is null ? TrimValue(rest) : TrimValue(rest[..contentAt.index]);
+        var content = contentAt.phrase is null ? null : ExactContent(rest[(contentAt.index + contentAt.phrase.Length)..]);
+        var ambiguousPlace = HasAmbiguousPlacementVerb(lower);
+        var missing = string.IsNullOrWhiteSpace(reference) ? "document" : string.IsNullOrWhiteSpace(content) ? "content" : ambiguousPlace ? "operation" : null;
+        return new(verb, Content: content, DocumentReference: reference, Missing: missing, NeedsOperationChoice: ambiguousPlace);
     }
 
     private static KnowledgeCommand CreateDocument(string text)
@@ -139,7 +541,7 @@ internal static class KnowledgeCommandPlanner
         var titleEnd = new[] { sectionMarker?.Index, contentMarker?.Index }.Where(x => x is not null).Select(x => x!.Value).DefaultIfEmpty(rest.Length).Min();
         var title = TrimValue(rest[..titleEnd]);
         if (title is not null) title = RemovePrefix(title, "с названием") ?? RemovePrefix(title, "название") ?? title;
-        var content = contentMarker is null ? null : TrimValue(rest[contentMarker.Value.End..(sectionMarker is { } section && section.Index > contentMarker.Value.Index ? section.Index : rest.Length)]);
+        var content = contentMarker is null ? null : ExactContent(rest[contentMarker.Value.End..(sectionMarker is { } section && section.Index > contentMarker.Value.Index ? section.Index : rest.Length)]);
         var sectionTitle = sectionMarker is null ? null : TrimValue(rest[sectionMarker.Value.End..]);
         return new(KnowledgeCommandKind.CreateDocument, Title: title, Content: content, SectionTitle: sectionTitle, Missing: string.IsNullOrWhiteSpace(title) ? "title" : null);
     }
@@ -159,5 +561,6 @@ internal static class KnowledgeCommandPlanner
     private static string? ExtractAfterPhrase(string text, string phrase) => FindPhrase(text, phrase) is { } marker ? TrimValue(text[marker.End..]) : null;
     private static string? RemovePrefix(string text, string prefix) => text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? TrimValue(text[prefix.Length..]) : null;
     private static string? TrimValue(string value) { var trimmed = value.Trim(' ', ':', '-', '«', '»', '.'); return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed; }
+    private static string? ExactContent(string value) { var trimmed = value.Trim(); if (trimmed.StartsWith(':')) trimmed = trimmed[1..].TrimStart(); return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed; }
     private static bool TryId(string text, out Guid id) { foreach (var token in text.Split([' ', ',', ':', '(', ')'], StringSplitOptions.RemoveEmptyEntries)) if (Guid.TryParse(token.Trim('«', '»', '.'), out id)) return true; id = default; return false; }
 }
