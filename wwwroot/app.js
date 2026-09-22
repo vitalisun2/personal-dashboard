@@ -758,6 +758,7 @@
   // -------- Перетаскивание задач и разделов --------
   // Реализовано через Pointer Events, поэтому одинаково работает мышью и касанием.
   let activeDrag = null;
+  const TASK_DRAG_START_TOLERANCE = 4;
 
   function startDrag(event) {
     const handle=event.target.closest('[data-drag-kind]');
@@ -769,44 +770,100 @@
     const kind=handle.dataset.dragKind;
     const item=kind==='task' ? handle.closest('.task-row') : handle.closest('.task-group');
     if (!item) return;
-    activeDrag={ kind, item, pointerId:event.pointerId, moved:false,
+    activeDrag={ kind, item, handle, pointerId:event.pointerId, startX:event.clientX, startY:event.clientY, started:false, moved:false,
       startSection: kind==='task' ? item.closest('.task-group')?.dataset.sectionGroup : null };
-    item.classList.add('dragging');
     handle.setPointerCapture?.(event.pointerId);
     event.preventDefault();
+  }
+
+  function clearTaskDropTarget(drag) {
+    drag.dropTarget?.classList.remove('task-drop-before','task-drop-after','task-drop-inside');
+    drag.dropTarget=null;
+    drag.dropPlacement=null;
+  }
+
+  function clearTaskDrag(drag) {
+    drag.item.classList.remove('dragging');
+    drag.ghost?.remove();
+    clearTaskDropTarget(drag);
+  }
+
+  function startTaskDragVisual(drag) {
+    drag.started=true;
+    drag.item.classList.add('dragging');
+    const rect=drag.item.getBoundingClientRect();
+    drag.offsetX=drag.startX-rect.left;
+    drag.offsetY=drag.startY-rect.top;
+    drag.ghost=drag.item.cloneNode(true);
+    drag.ghost.classList.remove('dragging');
+    drag.ghost.classList.add('task-drag-ghost');
+    drag.ghost.setAttribute('aria-hidden','true');
+    drag.ghost.inert=true;
+    drag.ghost.style.width=`${rect.width}px`;
+    document.body.append(drag.ghost);
+  }
+
+  function updateTaskDropTarget(drag,event) {
+    const point=document.elementFromPoint(event.clientX,event.clientY);
+    let target=null, placement=null;
+    if (drag.kind==='task') {
+      const row=point?.closest('.task-row');
+      if (row && row!==drag.item) {
+        target=row;
+        const rect=row.getBoundingClientRect();
+        placement=event.clientY<rect.top+rect.height/2?'before':'after';
+      } else {
+        const group=point?.closest('.task-group');
+        if (group?.querySelector(':scope > .group-tasks')) { target=group; placement='inside'; }
+      }
+    } else {
+      const group=point?.closest('.task-group');
+      if (group && group!==drag.item && group.parentElement===$('#taskList')) {
+        target=group;
+        const rect=group.getBoundingClientRect();
+        placement=event.clientY<rect.top+rect.height/2?'before':'after';
+      }
+    }
+    if (target===drag.dropTarget && placement===drag.dropPlacement) return;
+    clearTaskDropTarget(drag);
+    drag.dropTarget=target;
+    drag.dropPlacement=placement;
+    if (placement==='before') target?.classList.add('task-drop-before');
+    else if (placement==='after') target?.classList.add('task-drop-after');
+    else if (placement==='inside') target?.classList.add('task-drop-inside');
+  }
+
+  function applyTaskDrop(drag) {
+    const target=drag.dropTarget, placement=drag.dropPlacement;
+    if (!target || !placement) return false;
+    if (drag.kind==='task') {
+      if (placement==='inside') {
+        const list=target.querySelector(':scope > .group-tasks');
+        if (!list) return false;
+        list.append(drag.item);
+      } else {
+        const list=target.closest('.group-tasks');
+        if (!list) return false;
+        list.insertBefore(drag.item,placement==='before'?target:target.nextSibling);
+      }
+      return true;
+    }
+    const parent=$('#taskList');
+    if (target.parentElement!==parent) return false;
+    parent.insertBefore(drag.item,placement==='before'?target:target.nextSibling);
+    return true;
   }
 
   function moveDrag(event) {
     const drag=activeDrag;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const point=document.elementFromPoint(event.clientX,event.clientY);
-    if (drag.kind==='task') {
-      // Задачу можно перетащить не только внутри своего раздела, но и в другой
-      // раздел текущей страницы: бросок позиционирует её внутри целевого списка.
-      const row=point?.closest('.task-row');
-      let list, ref;
-      if (row && row!==drag.item) {
-        list=row.closest('.group-tasks');
-        const rect=row.getBoundingClientRect();
-        ref=event.clientY<rect.top+rect.height/2 ? row : row.nextSibling;
-      } else {
-        const group=point?.closest('.task-group');
-        if (!group || group===drag.item.closest('.task-group')) return;
-        list=group.querySelector(':scope > .group-tasks');
-        if (!list) return;
-        ref=null; // бросок на заголовок или пустое место раздела — в конец списка
-      }
-      list.insertBefore(drag.item, ref);
-      drag.moved=true;
-      event.preventDefault();
-      return;
+    if (!drag.started) {
+      if (Math.hypot(event.clientX-drag.startX,event.clientY-drag.startY)<TASK_DRAG_START_TOLERANCE) return;
+      startTaskDragVisual(drag);
     }
-    const target=point?.closest('.task-group');
-    if (!target || target===drag.item) return;
-    const parent=$('#taskList');
-    if (target.parentElement!==parent) return;
-    const rect=target.getBoundingClientRect();
-    parent.insertBefore(drag.item,event.clientY<rect.top+rect.height/2?target:target.nextSibling);
+    drag.ghost.style.left=`${event.clientX-drag.offsetX}px`;
+    drag.ghost.style.top=`${event.clientY-drag.offsetY}px`;
+    updateTaskDropTarget(drag,event);
     drag.moved=true;
     event.preventDefault();
   }
@@ -815,9 +872,10 @@
     const drag=activeDrag;
     if (!drag || drag.pointerId !== event.pointerId) return;
     activeDrag=null;
-    drag.item.classList.remove('dragging');
-    if (!drag.moved) return;
-    if (!commit) { await loadTasks(); return; }
+    if (!drag.started) return;
+    const validDrop=commit&&applyTaskDrop(drag);
+    clearTaskDrag(drag);
+    if (!validDrop) return;
 
     try {
       if (drag.kind==='task') {
@@ -1089,24 +1147,32 @@
     }else if(!root)return;
     try{await moveKnowledge(id,parentId,order);}catch(err){showToast(err.message);}
   }
-  const KNOWLEDGE_DRAG_START_TOLERANCE = 20;
+  const KNOWLEDGE_DRAG_START_TOLERANCE = 4;
   let knowledgePress=null, suppressKnowledgeClickPoint=null;
+  document.addEventListener('pointerdown',e=>{
+    if(!document.querySelector('.knowledge-context-menu')||e.target.closest('.knowledge-context-menu'))return;
+    closeKnowledgeContext();
+    suppressKnowledgeClickPoint={x:e.clientX,y:e.clientY,until:Date.now()+700};
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  },true);
   function updateKnowledgeGhost(press,x,y){press.ghost.style.left=`${x-press.offsetX}px`;press.ghost.style.top=`${y-press.offsetY}px`;}
   function clearKnowledgeDrag(press){press.row.classList.remove('dragging');press.ghost?.remove();press.dropTarget?.classList.remove('knowledge-drop-target','knowledge-drop-before','knowledge-drop-after');}
   $('#knowledgeTree').addEventListener('pointerdown',e=>{
     const row=e.target.closest('[data-knowledge-id]');
     if(knowledgePress||!row||e.button!==0||e.target.closest('[data-knowledge-add-section],[data-knowledge-add-doc]'))return;
     closeKnowledgeContext();
-    const press={id:row.dataset.knowledgeId,row,canDrag:!!e.target.closest('.knowledge-drag-handle'),x:e.clientX,y:e.clientY,pointerId:e.pointerId,dragging:false,longPressed:false,menuOpen:false,timer:null,ghost:null,dropTarget:null};
-    press.timer=setTimeout(()=>{if(knowledgePress!==press||press.dragging)return;press.longPressed=true;press.menuOpen=true;knowledgeContext(press.id,press.x,press.y);},LONG_PRESS_MS);
+    const canDrag=!!e.target.closest('.knowledge-drag-handle');
+    const press={id:row.dataset.knowledgeId,row,canDrag,x:e.clientX,y:e.clientY,pointerId:e.pointerId,dragging:false,longPressed:false,menuOpen:false,timer:null,ghost:null,dropTarget:null};
+    if(!canDrag)press.timer=setTimeout(()=>{if(knowledgePress!==press||press.dragging)return;press.longPressed=true;press.menuOpen=true;knowledgeContext(press.id,press.x,press.y);},LONG_PRESS_MS);
+    else{e.preventDefault();e.target.setPointerCapture?.(e.pointerId);}
     knowledgePress=press;
   });
   document.addEventListener('pointermove',e=>{
     const press=knowledgePress;if(!press||press.pointerId!==e.pointerId)return;
     if(!press.dragging){
       if(Math.hypot(e.clientX-press.x,e.clientY-press.y)<=KNOWLEDGE_DRAG_START_TOLERANCE)return;
-      if(!press.longPressed){clearTimeout(press.timer);knowledgePress=null;return;}
-      if(!press.canDrag)return;
+      if(!press.canDrag){clearTimeout(press.timer);knowledgePress=null;return;}
       clearTimeout(press.timer);
       if(press.menuOpen)closeKnowledgeContext();
       press.dragging=true;
