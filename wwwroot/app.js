@@ -203,9 +203,10 @@
   }
 
   async function loadChat(sessionId) {
-    if (!sessionId) return;
+    if (!sessionId) { renderChat({ messages: [] }); requestAnimationFrame(() => $('#chatInput').focus()); return; }
     const data = await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
     renderChat(data);
+    $('#chatInput').focus();
   }
   function renderChat(data) {
     const box = $('#chatMessages'); box.textContent = '';
@@ -865,7 +866,7 @@
   $('#backButton').addEventListener('click',()=>goBack({main:'tasks',taskTab:state.taskTab,filter:state.taskFilter}));
     $('#detailDescription').addEventListener('click', beginDescriptionEdit);
     $('#detailTitle').addEventListener('click', beginTitleEdit);
-  $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();if(!text)return;btn.disabled=true;btn.classList.add('sending');try{$('#taskInput').value='';navigate({main:'tasks',chat:true,sessionId:null},{replace:false});await sendChatMessage(text);}catch(err){showToast(err.message);navigate({main:'tasks',taskTab:'backlog',filter:'all'},{replace:true});}finally{btn.disabled=false;btn.classList.remove('sending');}});
+  $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();navigate({main:'tasks',chat:true,sessionId:null},{replace:false});if(!text)return;btn.disabled=true;btn.classList.add('sending');try{$('#taskInput').value='';await sendChatMessage(text);}catch(err){showToast(err.message);navigate({main:'tasks',taskTab:'backlog',filter:'all'},{replace:true});}finally{btn.disabled=false;btn.classList.remove('sending');}});
   $('#chatForm').addEventListener('submit',async e=>{e.preventDefault();const input=$('#chatInput');const text=input.value.trim();if(!text)return;input.value='';try{await sendChatMessage(text);}catch(err){showToast(err.message);}});
   $('#chatBackButton').addEventListener('click',()=>navigate({main:'tasks',taskTab:'backlog',filter:'all'}));
   $('#taskDraftForm').addEventListener('submit', e => { e.preventDefault(); reviseTaskDraft(); });
