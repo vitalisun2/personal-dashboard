@@ -307,7 +307,7 @@
     if (!nav || nav.scrollWidth <= nav.clientWidth) return;
     const buttons = [...nav.querySelectorAll('.bottom-item')];
     if (buttons.length < 2) return;
-    const step = buttons[1].offsetLeft - buttons[0].offsetLeft;
+    const step = buttons[1].getBoundingClientRect().left - buttons[0].getBoundingClientRect().left;
     if (!step) return;
     const target = Math.max(0, Math.min(nav.scrollWidth - nav.clientWidth, Math.round(nav.scrollLeft / step) * step));
     nav.scrollTo({ left: target, behavior: 'smooth' });
@@ -319,38 +319,78 @@
     restoreBottomNavOrder();
     nav.addEventListener('scroll', updateBottomNavIndicators, { passive: true });
     nav.addEventListener('pointerdown', event => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || bottomNavGesture) return;
       const button = event.target.closest('.bottom-item');
-      bottomNavGesture = { button, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dragging: false, moved: false, armed: false, timer: button ? setTimeout(() => { if (bottomNavGesture?.button === button) bottomNavGesture.armed = true; }, 420) : null };
+      event.preventDefault();
+      nav.dataset.suppressClick = 'false';
+      const gesture = bottomNavGesture = {
+        button, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
+        startScrollLeft: nav.scrollLeft, dragging: false, moved: false, armed: false,
+        ghost: null, dropTarget: null, offsetX: 0, offsetY: 0,
+        timer: button ? setTimeout(() => { if (bottomNavGesture === gesture) gesture.armed = true; }, 420) : null
+      };
+      nav.setPointerCapture?.(event.pointerId);
     });
     nav.addEventListener('pointermove', event => {
       const gesture = bottomNavGesture;
       if (!gesture || gesture.pointerId !== event.pointerId) return;
       const dx = event.clientX - gesture.startX;
       const dy = event.clientY - gesture.startY;
-      if (!gesture.dragging && (Math.abs(dx) > 12 || Math.abs(dy) > 12)) {
+      if (!gesture.dragging && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
         gesture.moved = true;
-        clearTimeout(gesture.timer);
-        if (!gesture.armed) return;
-        gesture.dragging = true;
-        gesture.button.setPointerCapture?.(event.pointerId);
-        gesture.button.classList.add('bottom-item-dragging');
-        event.preventDefault();
+        if (gesture.armed && gesture.button) {
+          gesture.dragging = true;
+          clearTimeout(gesture.timer);
+          const rect = gesture.button.getBoundingClientRect();
+          gesture.offsetX = gesture.startX - rect.left;
+          gesture.offsetY = gesture.startY - rect.top;
+          gesture.button.classList.add('bottom-item-dragging');
+          gesture.ghost = gesture.button.cloneNode(true);
+          gesture.ghost.classList.add('bottom-item-drag-ghost');
+          gesture.ghost.setAttribute('aria-hidden', 'true');
+          gesture.ghost.inert = true;
+          gesture.ghost.style.width = `${rect.width}px`;
+          document.body.append(gesture.ghost);
+        }
       }
-      if (!gesture.dragging) return;
+      if (!gesture.dragging) {
+        if (gesture.moved) {
+          clearTimeout(gesture.timer);
+          nav.scrollLeft = gesture.startScrollLeft - dx;
+          updateBottomNavIndicators();
+        }
+        return;
+      }
       event.preventDefault();
+      gesture.ghost.style.left = `${event.clientX - gesture.offsetX}px`;
+      gesture.ghost.style.top = `${event.clientY - gesture.offsetY}px`;
       const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('.bottom-item');
-      if (!target || target === gesture.button || target.parentElement !== nav) return;
+      if (!target || target === gesture.button || target.parentElement !== nav) {
+        gesture.dropTarget?.classList.remove('bottom-item-drop-target');
+        gesture.dropTarget = null;
+        return;
+      }
       const rect = target.getBoundingClientRect();
-      nav.insertBefore(gesture.button, event.clientX < rect.left + rect.width / 2 ? target : target.nextSibling);
+      const before = event.clientX < rect.left + rect.width / 2;
+      if (gesture.dropTarget !== target) {
+        gesture.dropTarget?.classList.remove('bottom-item-drop-target');
+        gesture.dropTarget = target;
+        target.classList.add('bottom-item-drop-target');
+      }
+      nav.insertBefore(gesture.button, before ? target : target.nextSibling);
     });
     const finish = event => {
       const gesture = bottomNavGesture;
       if (!gesture || gesture.pointerId !== event.pointerId) return;
       clearTimeout(gesture.timer);
-      if (gesture.dragging) { gesture.button.classList.remove('bottom-item-dragging'); saveBottomNavOrder(); }
+      if (gesture.dragging) {
+        gesture.button.classList.remove('bottom-item-dragging');
+        gesture.ghost?.remove();
+        gesture.dropTarget?.classList.remove('bottom-item-drop-target');
+        saveBottomNavOrder();
+      }
       if (gesture.moved || gesture.dragging || gesture.armed) nav.dataset.suppressClick = 'true';
-      if (gesture.moved && !gesture.dragging) setTimeout(snapBottomNav, 280);
+      if (gesture.moved && !gesture.dragging) setTimeout(snapBottomNav, 120);
       bottomNavGesture = null;
       updateBottomNavIndicators();
     };
@@ -988,6 +1028,7 @@
   $('#knowledgeDeleteCancel').addEventListener('click',()=>$('#knowledgeDeleteModal').close('cancel'));
   $('#knowledgeDeleteConfirm').addEventListener('click',()=>$('#knowledgeDeleteModal').close('delete'));
   $$('[data-main]').forEach(b=>b.addEventListener('click',async()=>{
+    if(b.dataset.main==='next-section'){showToast('Этот раздел пока не реализован');return;}
     try{if(state.main==='knowledge'&&state.knowledgeEditing)await closeKnowledgeDocument();}catch(e){showToast(e.message);return;}
     navigate(b.dataset.main==='memory'
       ? {main:'memory',memoryTab:state.memoryTab}
