@@ -22,7 +22,7 @@ if (-not (Test-Path (Join-Path $dir '.env'))) {
 }
 
 # По умолчанию приложение ходит в Ollama хоста (host.docker.internal:11434) — ничего менять не нужно.
-docker compose up -d --build
+docker compose up -d --build dashboard
 
 Write-Host ''
 Write-Host 'Готово. Проверка: http://localhost:8080' -ForegroundColor Green

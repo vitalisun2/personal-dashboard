@@ -1,3 +1,8 @@
+# The long-lived local dashboard is owned by this Compose project.  Keeping
+# this name stable lets the deployment script and the post-commit hook update
+# the same container instead of competing for its fixed container name.
+name: pdb-deploy
+
 services:
   dashboard:
     build: .
