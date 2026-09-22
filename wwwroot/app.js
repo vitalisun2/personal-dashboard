@@ -436,7 +436,17 @@
   // -------- База знаний --------
   async function loadKnowledge(){ state.knowledge=await api('/api/knowledge/tree'); renderKnowledgeTree(); }
   function knowledgeFlat(nodes,out=[]){nodes.forEach(n=>{out.push(n);if(n.children)knowledgeFlat(n.children,out);});return out;}
-  function renderKnowledgeTree(){const box=$('#knowledgeTree');box.replaceChildren();const render=(nodes,parent,depth=0)=>nodes.forEach(n=>{const row=document.createElement('div');row.className='knowledge-row';row.dataset.knowledgeId=n.id;row.dataset.knowledgeParent=parent||'';row.style.setProperty('--knowledge-depth',depth);const handle=document.createElement('button');handle.className='knowledge-drag-handle';handle.type='button';handle.setAttribute('aria-label','Перетащить');handle.textContent='⠿';row.append(handle);const toggle=document.createElement('button');toggle.className='knowledge-toggle';toggle.type='button';toggle.textContent=n.kind==='section'?(state.knowledgeExpanded.has(n.id)?'⌄':'›'):'·';toggle.disabled=n.kind!=='section';row.append(toggle);const title=document.createElement('button');title.type='button';title.className='knowledge-node-title '+n.kind;title.textContent=n.title;row.append(title);if(n.kind==='section'){const actions=document.createElement('span');actions.className='knowledge-inline-actions';const addDoc=document.createElement('button');addDoc.type='button';addDoc.textContent='+ MD';addDoc.dataset.knowledgeAddDoc=n.id;const addSection=document.createElement('button');addSection.type='button';addSection.textContent='+ раздел';addSection.dataset.knowledgeAddSection=n.id;actions.append(addDoc,addSection);row.append(actions);}box.append(row);if(n.kind==='section'&&state.knowledgeExpanded.has(n.id))render(n.children||[],n.id,depth+1);});render(state.knowledge,null);const root=document.createElement('div');root.className='knowledge-root-drop';root.dataset.knowledgeRoot='';root.textContent='Перетащите сюда, чтобы вернуть в корень';box.append(root);const add=document.createElement('div');add.className='knowledge-create-actions';add.innerHTML='<button type="button" data-knowledge-add-section="">+ Раздел</button><button type="button" data-knowledge-add-doc="">+ Документ MD</button>';box.append(add);}
+  function setDisclosureState(button, expanded, label) {
+    button.replaceChildren();
+    const first = document.createElement('span'); first.textContent = expanded ? '⌃' : '⌄';
+    const second = document.createElement('span'); second.textContent = expanded ? '⌄' : '⌃';
+    button.append(first, second);
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    button.setAttribute('aria-expanded', String(expanded));
+  }
+
+  function renderKnowledgeTree(){const box=$('#knowledgeTree');box.replaceChildren();const render=(nodes,parent,depth=0)=>nodes.forEach(n=>{const row=document.createElement('div');row.className='knowledge-row';row.dataset.knowledgeId=n.id;row.dataset.knowledgeParent=parent||'';row.style.setProperty('--knowledge-depth',depth);const handle=document.createElement('button');handle.className='knowledge-drag-handle';handle.type='button';handle.setAttribute('aria-label','Перетащить');handle.textContent='☰';row.append(handle);const toggle=document.createElement('button');toggle.className='knowledge-toggle disclosure-toggle';toggle.type='button';toggle.disabled=n.kind!=='section';if(n.kind==='section')setDisclosureState(toggle,state.knowledgeExpanded.has(n.id),state.knowledgeExpanded.has(n.id)?'Свернуть раздел':'Развернуть раздел');else{toggle.textContent='·';toggle.setAttribute('aria-label','Документ');}row.append(toggle);const title=document.createElement('button');title.type='button';title.className='knowledge-node-title '+n.kind;title.textContent=n.title;row.append(title);if(n.kind==='section'){const actions=document.createElement('span');actions.className='knowledge-inline-actions';const addDoc=document.createElement('button');addDoc.type='button';addDoc.textContent='+ MD';addDoc.dataset.knowledgeAddDoc=n.id;const addSection=document.createElement('button');addSection.type='button';addSection.textContent='+ раздел';addSection.dataset.knowledgeAddSection=n.id;actions.append(addDoc,addSection);row.append(actions);}box.append(row);if(n.kind==='section'&&state.knowledgeExpanded.has(n.id))render(n.children||[],n.id,depth+1);});render(state.knowledge,null);const root=document.createElement('div');root.className='knowledge-root-drop';root.dataset.knowledgeRoot='';root.textContent='Перетащите сюда, чтобы вернуть в корень';box.append(root);const add=document.createElement('div');add.className='knowledge-create-actions';add.innerHTML='<button type="button" data-knowledge-add-section="">+ Раздел</button><button type="button" data-knowledge-add-doc="">+ Документ MD</button>';box.append(add);}
   function knowledgeNode(id){return knowledgeFlat(state.knowledge).find(n=>String(n.id)===String(id));}
   function requestKnowledgeName(heading,value='',action='Создать'){
     const dialog=$('#knowledgeNameModal'),input=$('#knowledgeNameInput');
@@ -516,11 +526,17 @@
       const group=document.createElement('section'); group.className='task-group'; group.dataset.sectionGroup=section;
       const h=document.createElement('div'); h.className='group-header';
       const toggle=document.createElement('button'); toggle.type='button'; toggle.className='group-toggle'; toggle.dataset.taskGroup=section; toggle.textContent=section;
-      h.append(createDragHandle('section', section, 'Перетащить раздел'), toggle); group.append(h);
+      const disclosure=document.createElement('button'); disclosure.type='button'; disclosure.className='task-section-toggle disclosure-toggle'; disclosure.dataset.taskSectionToggle=section;
+      setDisclosureState(disclosure,state.expanded[state.taskTab].has(section),state.expanded[state.taskTab].has(section)?'Свернуть раздел':'Развернуть раздел');
+      h.append(createDragHandle('section', section, 'Перетащить раздел'), toggle, disclosure); group.append(h);
       if (state.expanded[state.taskTab].has(section)) { const list=document.createElement('div'); list.className='group-tasks'; items.forEach(t=>list.append(createTaskRow(t))); group.append(list); }
       container.append(group);
     }
     $('#emptyState').classList.toggle('hidden', visible.length !== 0);
+    const sections=[...new Set(state.tasks.filter(task=>task.bucket===state.taskTab).map(task=>normalizeSection(task.section)))];
+    const expanded=sections.length>0&&sections.every(section=>state.expanded[state.taskTab].has(section));
+    const allToggle=$('#toggleAllSections');
+    if(allToggle)setDisclosureState(allToggle,expanded,expanded?'Свернуть все разделы':'Развернуть все разделы');
   }
 
   function showTaskDetail(task) {
@@ -951,6 +967,47 @@
     e.stopImmediatePropagation();
   }, true);
 
+  // -------- Контекстные действия задачи --------
+  let backlogTaskPress=null;
+  let suppressBacklogTaskClick=false;
+
+  function dismissBacklogTaskMenu(){document.querySelector('#backlogTaskMenu')?.remove();}
+  function openBacklogTaskMenu(taskId,clientX,clientY){
+    dismissBacklogTaskMenu();
+    dismissTodayTaskMenu();
+    const menu=document.createElement('div');menu.id='backlogTaskMenu';menu.className='task-context-menu';menu.setAttribute('role','menu');
+    for(const [label,attribute] of [['Переименовать','backlogTaskRename'],['Удалить','backlogTaskDelete']]){
+      const action=document.createElement('button');action.type='button';action.setAttribute('role','menuitem');action.dataset[attribute]=taskId;action.textContent=label;menu.append(action);
+    }
+    document.body.append(menu);positionContextMenu(menu,clientX,clientY);
+  }
+
+  document.addEventListener('pointerdown',e=>{
+    if(!document.querySelector('#backlogTaskMenu')||e.target.closest('#backlogTaskMenu'))return;
+    dismissBacklogTaskMenu();suppressBacklogTaskClick=true;e.preventDefault();e.stopImmediatePropagation();
+  },true);
+  document.addEventListener('pointerdown',e=>{
+    const row=e.target.closest('[data-task-row]');
+    const task=row&&state.tasks.find(item=>String(item.id)===String(row.dataset.taskRow));
+    if(!task||task.bucket!=='backlog'||e.button!==0||activeDrag||e.target.closest('[data-drag-kind]'))return;
+    const press={x:e.clientX,y:e.clientY,pointerId:e.pointerId,taskId:task.id,timer:null};
+    press.timer=setTimeout(()=>{
+      if(backlogTaskPress!==press)return;
+      backlogTaskPress=null;suppressBacklogTaskClick=true;openBacklogTaskMenu(press.taskId,press.x,press.y);
+    },LONG_PRESS_MS);
+    backlogTaskPress=press;
+  },true);
+  document.addEventListener('pointermove',e=>{
+    if(backlogTaskPress&&backlogTaskPress.pointerId===e.pointerId&&Math.hypot(e.clientX-backlogTaskPress.x,e.clientY-backlogTaskPress.y)>LONG_PRESS_TOLERANCE){clearTimeout(backlogTaskPress.timer);backlogTaskPress=null;}
+  },{passive:true});
+  document.addEventListener('pointerup',e=>{if(backlogTaskPress?.pointerId===e.pointerId){clearTimeout(backlogTaskPress.timer);backlogTaskPress=null;}},true);
+  document.addEventListener('pointercancel',e=>{if(backlogTaskPress?.pointerId===e.pointerId){clearTimeout(backlogTaskPress.timer);backlogTaskPress=null;}suppressBacklogTaskClick=false;},true);
+  document.addEventListener('contextmenu',e=>{if(e.target.closest('[data-task-row]'))e.preventDefault();});
+  document.addEventListener('click',e=>{
+    if(!suppressBacklogTaskClick)return;
+    suppressBacklogTaskClick=false;e.preventDefault();e.stopImmediatePropagation();
+  },true);
+
   // -------- Контекстное действие задачи «Сегодня» --------
   // Долгое нажатие на саму строку не затрагивает long-press заголовков разделов.
   let todayTaskPress = null;
@@ -967,6 +1024,7 @@
 
   function openTodayTaskMenu(taskId, clientX, clientY) {
     dismissTodayTaskMenu();
+    dismissBacklogTaskMenu();
     const menu=document.createElement('div'); menu.id='todayTaskMenu'; menu.className='today-task-context-menu'; menu.setAttribute('role','menu');
     const action=document.createElement('button'); action.type='button'; action.className='today-task-context-action'; action.dataset.todayTaskBacklog=taskId; action.setAttribute('role','menuitem'); action.textContent='← Backlog';
     menu.append(action); document.body.append(menu);
@@ -1098,16 +1156,6 @@
   function lessonSortCmp(a,b){const by=state.lessonSort;let d=0;if(by==='applied'){d=(b.appliedCount??0)-(a.appliedCount??0);if(!d)d=tsDiff(a.lastAppliedAt,b.lastAppliedAt);}else if(by==='read'){d=tsDiff(a.lastReadAt,b.lastReadAt);}else{d=tsDiff(a.occurredAt,b.occurredAt);}return d?d:String(a.title??'').localeCompare(String(b.title??''));}
   function debounce(fn,delay=220){let timer;return(...args)=>{clearTimeout(timer);timer=setTimeout(()=>fn(...args),delay);};}
 
-  // -------- Кнопки «Свернуть все» / «Развернуть все»: шевроны вместо текста --------
-  (function () {
-    [['collapseAll', 'Свернуть все', '› ‹'], ['expandAll', 'Развернуть все', '‹ ›']].forEach(([id, label, glyphs]) => {
-      const b = $(`#${id}`); if (!b) return;
-      if (!b.title) b.title = label;
-      if (!b.getAttribute('aria-label')) b.setAttribute('aria-label', label);
-      b.replaceChildren(glyphs);
-    });
-  })();
-
   // -------- Events --------
   $('#knowledgeNameForm').addEventListener('submit',e=>{e.preventDefault();const input=$('#knowledgeNameInput');if(!input.value.trim()){input.value='';input.reportValidity();return;}$('#knowledgeNameModal').close('submit');});
   $('#knowledgeNameCancel').addEventListener('click',()=>$('#knowledgeNameModal').close('cancel'));
@@ -1217,8 +1265,7 @@
   $('#backlogTab').addEventListener('click',()=>navigate({main:'tasks',taskTab:'backlog',filter:'all'}));
   $('#todayTab').addEventListener('click',()=>navigate({main:'tasks',taskTab:'today',filter:'all'}));
   $$('.filter').forEach(b=>b.addEventListener('click',()=>navigate({main:'tasks',taskTab:'today',filter:b.dataset.filter})));
-  $('#collapseAll').addEventListener('click',()=>{state.expanded[state.taskTab].clear();renderTasks();});
-  $('#expandAll').addEventListener('click',()=>{state.tasks.filter(t=>t.bucket===state.taskTab).forEach(t=>state.expanded[state.taskTab].add(normalizeSection(t.section)));renderTasks();});
+  $('#toggleAllSections').addEventListener('click',()=>{const sections=[...new Set(state.tasks.filter(t=>t.bucket===state.taskTab).map(t=>normalizeSection(t.section)))];const allExpanded=sections.length>0&&sections.every(section=>state.expanded[state.taskTab].has(section));if(allExpanded)state.expanded[state.taskTab].clear();else sections.forEach(section=>state.expanded[state.taskTab].add(section));renderTasks();});
   $('#backButton').addEventListener('click',()=>goBack({main:'tasks',taskTab:state.taskTab,filter:state.taskFilter}));
     $('#detailDescription').addEventListener('click', beginDescriptionEdit);
     $('#detailTitle').addEventListener('click', beginTitleEdit);
@@ -1250,7 +1297,10 @@
   document.addEventListener('click',async e=>{
     try{
       if(e.target.closest('[data-drag-kind]'))return;
+      const rename=e.target.closest('[data-backlog-task-rename]');if(rename){const id=rename.dataset.backlogTaskRename;dismissBacklogTaskMenu();const task=state.tasks.find(item=>String(item.id)===String(id));if(task){navigate({main:'tasks',taskTab:task.bucket,filter:'all',taskId:task.id});requestAnimationFrame(beginTitleEdit);}return;}
+      const remove=e.target.closest('[data-backlog-task-delete]');if(remove){const id=remove.dataset.backlogTaskDelete;dismissBacklogTaskMenu();await deleteTask(id);return;}
       const back=e.target.closest('[data-today-task-backlog]');if(back){dismissTodayTaskMenu();await moveTask(back.dataset.todayTaskBacklog);return;}
+      const disclosure=e.target.closest('[data-task-section-toggle]');if(disclosure){toggleSection(disclosure.dataset.taskSectionToggle);return;}
       const g=e.target.closest('[data-task-group]');if(g){closeSectionMenu();toggleSection(g.dataset.taskGroup);return;}
       const o=e.target.closest('[data-task-open]');if(o){const t=state.tasks.find(x=>x.id===o.dataset.taskOpen);if(t)navigate({main:'tasks',taskTab:t.bucket,filter:'all',taskId:t.id});return;}
       const m=e.target.closest('[data-task-move]');if(m){await moveTask(m.dataset.taskMove);return;}
