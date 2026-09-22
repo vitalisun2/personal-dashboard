@@ -189,8 +189,9 @@
     state.taskTab = route.taskTab;
     state.taskFilter = route.filter;
     setMain('tasks');
-    if (route.chat) { closeTaskDetail(); $('#listView').classList.add('hidden'); $('#chatView').classList.remove('hidden'); loadChat(route.sessionId); return; }
+    if (route.chat) { closeTaskDetail(); $('#listView').classList.add('hidden'); $('#chatView').classList.remove('hidden'); syncMobileChatViewport(); loadChat(route.sessionId); return; }
     $('#chatView').classList.add('hidden');
+    syncMobileChatViewport();
     const task = route.taskId && state.tasks.find(item => String(item.id) === String(route.taskId));
     if (task) {
       state.taskTab = task.bucket;
@@ -213,6 +214,29 @@
     (data.messages || []).forEach(message => { const bubble = document.createElement('div'); bubble.className = `chat-bubble ${message.role === 'user' ? 'chat-user' : 'chat-agent'}`; bubble.textContent = message.text; box.append(bubble); });
     box.scrollTop = box.scrollHeight;
   }
+
+  function syncMobileChatViewport() {
+    const viewport = window.visualViewport;
+    const top = viewport?.offsetTop || 0;
+    const height = viewport?.height || window.innerHeight;
+    const keyboardInset = Math.max(0, window.innerHeight - top - height);
+    const chatOpen = !$('#chatView').classList.contains('hidden');
+    const inputFocused = document.activeElement === $('#chatInput');
+    const nav = $('.bottom-nav');
+    document.documentElement.style.setProperty('--chat-viewport-top', `${top}px`);
+    if (nav) nav.style.bottom = chatOpen && inputFocused ? `${keyboardInset}px` : '';
+    document.documentElement.style.setProperty('--chat-nav-bottom', `${(nav?.offsetHeight || 0) + 8 + (chatOpen && inputFocused ? keyboardInset : 0)}px`);
+    if (chatOpen && inputFocused) requestAnimationFrame(() => {
+      const messages = $('#chatMessages');
+      messages.scrollTop = messages.scrollHeight;
+    });
+  }
+
+  window.visualViewport?.addEventListener('resize', syncMobileChatViewport);
+  window.visualViewport?.addEventListener('scroll', syncMobileChatViewport);
+  window.addEventListener('resize', syncMobileChatViewport);
+  $('#chatInput').addEventListener('focus', syncMobileChatViewport);
+  $('#chatInput').addEventListener('blur', () => setTimeout(syncMobileChatViewport, 80));
   async function sendChatMessage(text) {
     const route = parseRoute();
     const data = route.sessionId
@@ -237,6 +261,95 @@
     $('#memorySection').classList.toggle('hidden', value !== 'memory');
     $('#knowledgeSection').classList.toggle('hidden', value !== 'knowledge');
     $$('[data-main]').forEach(b => b.classList.toggle('active', b.dataset.main === value));
+  }
+
+  const bottomNavOrderKey = 'personalDashboardBottomNavOrder';
+  let bottomNavGesture = null;
+
+  function restoreBottomNavOrder() {
+    const nav = $('.bottom-nav');
+    if (!nav) return;
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem(bottomNavOrderKey) || '[]'); } catch {}
+    const buttons = [...nav.querySelectorAll('.bottom-item')];
+    const byMain = new Map(buttons.map(button => [button.dataset.main, button]));
+    const order = [...saved.filter(main => byMain.has(main)), ...buttons.map(button => button.dataset.main).filter(main => !saved.includes(main))];
+    order.forEach(main => nav.append(byMain.get(main)));
+  }
+
+  function saveBottomNavOrder() {
+    const nav = $('.bottom-nav');
+    if (nav) localStorage.setItem(bottomNavOrderKey, JSON.stringify([...nav.querySelectorAll('.bottom-item')].map(button => button.dataset.main)));
+  }
+
+  function updateBottomNavIndicators() {
+    const nav = $('.bottom-nav');
+    if (!nav) return;
+    nav.classList.toggle('has-left', nav.scrollLeft > 2);
+    nav.classList.toggle('has-right', nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 2);
+  }
+
+  function snapBottomNav() {
+    const nav = $('.bottom-nav');
+    if (!nav || nav.scrollWidth <= nav.clientWidth) return;
+    const buttons = [...nav.querySelectorAll('.bottom-item')];
+    if (buttons.length < 2) return;
+    const step = buttons[1].offsetLeft - buttons[0].offsetLeft;
+    if (!step) return;
+    const target = Math.max(0, Math.min(nav.scrollWidth - nav.clientWidth, Math.round(nav.scrollLeft / step) * step));
+    nav.scrollTo({ left: target, behavior: 'smooth' });
+  }
+
+  function initBottomNavGestures() {
+    const nav = $('.bottom-nav');
+    if (!nav) return;
+    restoreBottomNavOrder();
+    nav.addEventListener('scroll', updateBottomNavIndicators, { passive: true });
+    nav.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      const button = event.target.closest('.bottom-item');
+      bottomNavGesture = { button, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dragging: false, moved: false, armed: false, timer: button ? setTimeout(() => { if (bottomNavGesture?.button === button) bottomNavGesture.armed = true; }, 420) : null };
+    });
+    nav.addEventListener('pointermove', event => {
+      const gesture = bottomNavGesture;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      const dx = event.clientX - gesture.startX;
+      const dy = event.clientY - gesture.startY;
+      if (!gesture.dragging && (Math.abs(dx) > 12 || Math.abs(dy) > 12)) {
+        gesture.moved = true;
+        clearTimeout(gesture.timer);
+        if (!gesture.armed) return;
+        gesture.dragging = true;
+        gesture.button.setPointerCapture?.(event.pointerId);
+        gesture.button.classList.add('bottom-item-dragging');
+        event.preventDefault();
+      }
+      if (!gesture.dragging) return;
+      event.preventDefault();
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('.bottom-item');
+      if (!target || target === gesture.button || target.parentElement !== nav) return;
+      const rect = target.getBoundingClientRect();
+      nav.insertBefore(gesture.button, event.clientX < rect.left + rect.width / 2 ? target : target.nextSibling);
+    });
+    const finish = event => {
+      const gesture = bottomNavGesture;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      clearTimeout(gesture.timer);
+      if (gesture.dragging) { gesture.button.classList.remove('bottom-item-dragging'); saveBottomNavOrder(); }
+      if (gesture.moved || gesture.dragging || gesture.armed) nav.dataset.suppressClick = 'true';
+      if (gesture.moved && !gesture.dragging) setTimeout(snapBottomNav, 280);
+      bottomNavGesture = null;
+      updateBottomNavIndicators();
+    };
+    nav.addEventListener('pointerup', finish);
+    nav.addEventListener('pointercancel', finish);
+    nav.addEventListener('click', event => {
+      if (nav.dataset.suppressClick !== 'true') return;
+      delete nav.dataset.suppressClick;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+    requestAnimationFrame(updateBottomNavIndicators);
   }
 
   // -------- База знаний --------
@@ -975,6 +1088,7 @@
 
   window.addEventListener('popstate', applyCurrentRoute);
   window.addEventListener('hashchange', applyCurrentRoute);
+  initBottomNavGestures();
 
   async function init(){try{await Promise.all([loadTasks(),loadMemory(),loadKnowledge()]);setSecondary('agents');applyCurrentRoute();}catch(err){showToast(err.message);}}
   init();
