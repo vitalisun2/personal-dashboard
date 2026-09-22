@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
       <InternalsVisibleTo Include="PersonalDashboard.Tests" />
+      <ProjectReference Include="KnowledgeBase.Api\KnowledgeBase.Api.csproj" />
       <Compile Remove="tests/**" />
       <Compile Remove="KnowledgeBase.Api/**" />
       <Content Remove="tests/**" />

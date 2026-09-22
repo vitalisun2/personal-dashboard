@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using KnowledgeBase.Api;
 using static TaskPrompt;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,6 +12,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
 });
 builder.Services.AddSingleton<TaskStore>();
+builder.Services.AddKnowledgeBase();
 builder.Services.AddSingleton<ChatSessionStore>();
 builder.Services.AddSingleton<IMemoryRepository, MemoryRepository>();
 builder.Services.AddSingleton<ITaskAgent>(_ => new LlmTaskAgent(
@@ -27,6 +29,7 @@ app.UseStaticFiles();
 app.MapGet("/api/tasks", async (TaskStore store) => Results.Ok(await store.GetAllAsync()));
 
 app.MapChatRoutes();
+app.MapKnowledgeBaseApi();
 
 app.MapPost("/api/tasks", async (CreateTaskRequest request, TaskStore store, ITaskAgent agent) =>
 {

@@ -1,6 +1,8 @@
 using System.Text.Json;
 using KnowledgeBase.Api.Domain;
 using KnowledgeBase.Api.Application;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 
 namespace KnowledgeBase.Api.Infrastructure;
 
