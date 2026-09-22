@@ -436,17 +436,27 @@
   // -------- База знаний --------
   async function loadKnowledge(){ state.knowledge=await api('/api/knowledge/tree'); renderKnowledgeTree(); }
   function knowledgeFlat(nodes,out=[]){nodes.forEach(n=>{out.push(n);if(n.children)knowledgeFlat(n.children,out);});return out;}
-  function setDisclosureState(button, expanded, label) {
-    button.replaceChildren();
-    const first = document.createElement('span'); first.textContent = expanded ? '⌃' : '⌄';
-    const second = document.createElement('span'); second.textContent = expanded ? '⌄' : '⌃';
-    button.append(first, second);
+  const collapseAllIconPath = 'M4 6 10 2 16 6 M4 14 10 18 16 14';
+  const expandAllIconPath = 'M4 2 10 6 16 2 M4 18 10 14 16 18';
+  function setAllSectionsToggle(button, expanded, collapseLabel, expandLabel) {
+    if (!button) return;
+    const label = expanded ? collapseLabel : expandLabel;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 20 20');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', expanded ? collapseAllIconPath : expandAllIconPath);
+    svg.append(path);
+    const text = document.createElement('span');
+    text.className = 'all-sections-label';
+    text.textContent = label;
+    button.replaceChildren(svg, text);
     button.setAttribute('aria-label', label);
-    button.title = label;
     button.setAttribute('aria-expanded', String(expanded));
+    button.title = label;
   }
 
-  function renderKnowledgeTree(){const box=$('#knowledgeTree');box.replaceChildren();const render=(nodes,parent,depth=0)=>nodes.forEach(n=>{const row=document.createElement('div');row.className='knowledge-row';row.dataset.knowledgeId=n.id;row.dataset.knowledgeParent=parent||'';row.style.setProperty('--knowledge-depth',depth);const handle=document.createElement('button');handle.className='knowledge-drag-handle';handle.type='button';handle.setAttribute('aria-label','Перетащить');handle.textContent='☰';row.append(handle);const toggle=document.createElement('button');toggle.className='knowledge-toggle disclosure-toggle';toggle.type='button';toggle.disabled=n.kind!=='section';if(n.kind==='section')setDisclosureState(toggle,state.knowledgeExpanded.has(n.id),state.knowledgeExpanded.has(n.id)?'Свернуть раздел':'Развернуть раздел');else{toggle.textContent='·';toggle.setAttribute('aria-label','Документ');}row.append(toggle);const title=document.createElement('button');title.type='button';title.className='knowledge-node-title '+n.kind;title.textContent=n.title;row.append(title);if(n.kind==='section'){const actions=document.createElement('span');actions.className='knowledge-inline-actions';const addDoc=document.createElement('button');addDoc.type='button';addDoc.textContent='+ MD';addDoc.dataset.knowledgeAddDoc=n.id;const addSection=document.createElement('button');addSection.type='button';addSection.textContent='+ раздел';addSection.dataset.knowledgeAddSection=n.id;actions.append(addDoc,addSection);row.append(actions);}box.append(row);if(n.kind==='section'&&state.knowledgeExpanded.has(n.id))render(n.children||[],n.id,depth+1);});render(state.knowledge,null);const root=document.createElement('div');root.className='knowledge-root-drop';root.dataset.knowledgeRoot='';root.textContent='Перетащите сюда, чтобы вернуть в корень';box.append(root);const add=document.createElement('div');add.className='knowledge-create-actions';add.innerHTML='<button type="button" data-knowledge-add-section="">+ Раздел</button><button type="button" data-knowledge-add-doc="">+ Документ MD</button>';box.append(add);}
+  function renderKnowledgeTree(){const box=$('#knowledgeTree');box.replaceChildren();const render=(nodes,parent,depth=0)=>nodes.forEach(n=>{const row=document.createElement('div');row.className='knowledge-row';row.dataset.knowledgeId=n.id;row.dataset.knowledgeParent=parent||'';row.style.setProperty('--knowledge-depth',depth);const handle=document.createElement('button');handle.className='knowledge-drag-handle';handle.type='button';handle.setAttribute('aria-label','Перетащить');handle.textContent='☰';row.append(handle);const title=document.createElement('button');title.type='button';title.className='knowledge-node-title '+n.kind;title.textContent=n.title;row.append(title);if(n.kind==='section'){const actions=document.createElement('span');actions.className='knowledge-inline-actions';const addDoc=document.createElement('button');addDoc.type='button';addDoc.textContent='+ MD';addDoc.dataset.knowledgeAddDoc=n.id;const addSection=document.createElement('button');addSection.type='button';addSection.textContent='+ раздел';addSection.dataset.knowledgeAddSection=n.id;actions.append(addDoc,addSection);row.append(actions);}box.append(row);if(n.kind==='section'&&state.knowledgeExpanded.has(n.id))render(n.children||[],n.id,depth+1);});render(state.knowledge,null);const root=document.createElement('div');root.className='knowledge-root-drop';root.dataset.knowledgeRoot='';root.textContent='Перетащите сюда, чтобы вернуть в корень';box.append(root);const add=document.createElement('div');add.className='knowledge-create-actions';add.innerHTML='<button type="button" data-knowledge-add-section="">+ Раздел</button><button type="button" data-knowledge-add-doc="">+ Документ MD</button>';box.append(add);const sections=knowledgeFlat(state.knowledge).filter(n=>n.kind==='section');const expanded=sections.length>0&&sections.every(n=>state.knowledgeExpanded.has(n.id));setAllSectionsToggle($('#knowledgeToggleAll'),expanded,'Свернуть всё','Развернуть всё');}
   function knowledgeNode(id){return knowledgeFlat(state.knowledge).find(n=>String(n.id)===String(id));}
   function requestKnowledgeName(heading,value='',action='Создать'){
     const dialog=$('#knowledgeNameModal'),input=$('#knowledgeNameInput');
@@ -526,9 +536,7 @@
       const group=document.createElement('section'); group.className='task-group'; group.dataset.sectionGroup=section;
       const h=document.createElement('div'); h.className='group-header';
       const toggle=document.createElement('button'); toggle.type='button'; toggle.className='group-toggle'; toggle.dataset.taskGroup=section; toggle.textContent=section;
-      const disclosure=document.createElement('button'); disclosure.type='button'; disclosure.className='task-section-toggle disclosure-toggle'; disclosure.dataset.taskSectionToggle=section;
-      setDisclosureState(disclosure,state.expanded[state.taskTab].has(section),state.expanded[state.taskTab].has(section)?'Свернуть раздел':'Развернуть раздел');
-      h.append(createDragHandle('section', section, 'Перетащить раздел'), toggle, disclosure); group.append(h);
+      h.append(createDragHandle('section', section, 'Перетащить раздел'), toggle); group.append(h);
       if (state.expanded[state.taskTab].has(section)) { const list=document.createElement('div'); list.className='group-tasks'; items.forEach(t=>list.append(createTaskRow(t))); group.append(list); }
       container.append(group);
     }
@@ -536,7 +544,7 @@
     const sections=[...new Set(state.tasks.filter(task=>task.bucket===state.taskTab).map(task=>normalizeSection(task.section)))];
     const expanded=sections.length>0&&sections.every(section=>state.expanded[state.taskTab].has(section));
     const allToggle=$('#toggleAllSections');
-    if(allToggle)setDisclosureState(allToggle,expanded,expanded?'Свернуть все разделы':'Развернуть все разделы');
+    setAllSectionsToggle(allToggle,expanded,'Свернуть всё','Развернуть всё');
   }
 
   function showTaskDetail(task) {
@@ -1169,12 +1177,11 @@
       : b.dataset.main==='knowledge' ? {main:'knowledge'}
       : {main:'tasks',taskTab:state.taskTab,filter:state.taskFilter});
   }));
-  $('#knowledgeCollapseAll').addEventListener('click',()=>{state.knowledgeExpanded.clear();renderKnowledgeTree();});
-  $('#knowledgeExpandAll').addEventListener('click',()=>{knowledgeFlat(state.knowledge).filter(n=>n.kind==='section').forEach(n=>state.knowledgeExpanded.add(n.id));renderKnowledgeTree();});
+  $('#knowledgeToggleAll').addEventListener('click',()=>{const sections=knowledgeFlat(state.knowledge).filter(n=>n.kind==='section');const allExpanded=sections.length>0&&sections.every(n=>state.knowledgeExpanded.has(n.id));if(allExpanded)state.knowledgeExpanded.clear();else sections.forEach(n=>state.knowledgeExpanded.add(n.id));renderKnowledgeTree();});
   $('#knowledgeBack').addEventListener('click',()=>closeKnowledgeDocument().catch(e=>showToast(e.message)));
   $('#knowledgeModeToggle').addEventListener('click',async()=>{const button=$('#knowledgeModeToggle');if(button.disabled)return;button.disabled=true;try{if(state.knowledgeEditing)await saveKnowledge();state.knowledgeEditing=!state.knowledgeEditing;renderKnowledgeMode();if(state.knowledgeEditing)$('#knowledgeEditor').focus();}catch(e){showToast(e.message);}finally{button.disabled=false;}});
   async function closeKnowledgeDocument(){if(state.knowledgeEditing)await saveKnowledge();$('#knowledgeDocument').classList.add('hidden');$('#knowledgeTree').classList.remove('hidden');state.knowledgeDocument=null;state.knowledgeEditing=false;}
-  $('#knowledgeTree').addEventListener('click',async e=>{const addS=e.target.closest('[data-knowledge-add-section]'),addD=e.target.closest('[data-knowledge-add-doc]'),row=e.target.closest('[data-knowledge-id]');if(e.target.closest('.knowledge-drag-handle'))return;try{if(addS){await createKnowledge('section',addS.dataset.knowledgeAddSection||null);return;}if(addD){await createKnowledge('document',addD.dataset.knowledgeAddDoc||null);return;}if(!row)return;const n=knowledgeNode(row.dataset.knowledgeId);if(e.target.closest('.knowledge-toggle')||n.kind==='section'&&e.target.closest('.knowledge-node-title')){state.knowledgeExpanded.has(n.id)?state.knowledgeExpanded.delete(n.id):state.knowledgeExpanded.add(n.id);renderKnowledgeTree();}else if(n.kind==='document'){showKnowledgeDocument(await api(`/api/knowledge/documents/${n.id}`));}}catch(err){showToast(err.message);}});
+  $('#knowledgeTree').addEventListener('click',async e=>{const addS=e.target.closest('[data-knowledge-add-section]'),addD=e.target.closest('[data-knowledge-add-doc]'),row=e.target.closest('[data-knowledge-id]');if(e.target.closest('.knowledge-drag-handle'))return;try{if(addS){await createKnowledge('section',addS.dataset.knowledgeAddSection||null);return;}if(addD){await createKnowledge('document',addD.dataset.knowledgeAddDoc||null);return;}if(!row)return;const n=knowledgeNode(row.dataset.knowledgeId);if(n.kind==='section'&&e.target.closest('.knowledge-node-title')){state.knowledgeExpanded.has(n.id)?state.knowledgeExpanded.delete(n.id):state.knowledgeExpanded.add(n.id);renderKnowledgeTree();}else if(n.kind==='document'){showKnowledgeDocument(await api(`/api/knowledge/documents/${n.id}`));}}catch(err){showToast(err.message);}});
   $('#knowledgeTree').addEventListener('contextmenu',e=>{const row=e.target.closest('[data-knowledge-id]');if(row){e.preventDefault();if(e.pointerType!=='touch')knowledgeContext(row.dataset.knowledgeId,e.clientX,e.clientY);}});
   function knowledgeDropPlacement(target,clientY){
     if(!target)return null;
@@ -1300,7 +1307,6 @@
       const rename=e.target.closest('[data-backlog-task-rename]');if(rename){const id=rename.dataset.backlogTaskRename;dismissBacklogTaskMenu();const task=state.tasks.find(item=>String(item.id)===String(id));if(task){navigate({main:'tasks',taskTab:task.bucket,filter:'all',taskId:task.id});requestAnimationFrame(beginTitleEdit);}return;}
       const remove=e.target.closest('[data-backlog-task-delete]');if(remove){const id=remove.dataset.backlogTaskDelete;dismissBacklogTaskMenu();await deleteTask(id);return;}
       const back=e.target.closest('[data-today-task-backlog]');if(back){dismissTodayTaskMenu();await moveTask(back.dataset.todayTaskBacklog);return;}
-      const disclosure=e.target.closest('[data-task-section-toggle]');if(disclosure){toggleSection(disclosure.dataset.taskSectionToggle);return;}
       const g=e.target.closest('[data-task-group]');if(g){closeSectionMenu();toggleSection(g.dataset.taskGroup);return;}
       const o=e.target.closest('[data-task-open]');if(o){const t=state.tasks.find(x=>x.id===o.dataset.taskOpen);if(t)navigate({main:'tasks',taskTab:t.bucket,filter:'all',taskId:t.id});return;}
       const m=e.target.closest('[data-task-move]');if(m){await moveTask(m.dataset.taskMove);return;}
