@@ -499,11 +499,33 @@ sealed class LocalTaskAgent : ITaskAgent
 
     public Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections)
     {
-        // Без сети локальный агент не может надёжно интерпретировать произвольную
-        // правку, поэтому сохраняет исходный результат и явно добавляет уточнение.
-        // При доступном LLM этот путь не используется.
+        // Без сети локальный агент сохраняет исходный результат и добавляет уточнение.
+        // Явную замену заголовка поддерживаем отдельно, чтобы правка не ограничивалась
+        // только описанием даже при недоступных LLM-провайдерах.
         var note = string.Join(' ', correction.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return Task.FromResult(draft with { Description = $"{draft.Description}\n\nУточнение: {note}" });
+        var revisedTitle = TryExtractExplicitTitle(note) ?? draft.Title;
+        return Task.FromResult(draft with
+        {
+            Title = revisedTitle,
+            Description = $"{draft.Description}\n\nУточнение: {note}"
+        });
+    }
+
+    private static string? TryExtractExplicitTitle(string correction)
+    {
+        var lower = correction.ToLowerInvariant();
+        var marker = lower.IndexOf("заголовок", StringComparison.Ordinal);
+        if (marker < 0) marker = lower.IndexOf("название", StringComparison.Ordinal);
+        if (marker < 0) return null;
+
+        var tail = correction[(marker + (lower[marker..].StartsWith("заголовок", StringComparison.Ordinal) ? "заголовок" : "название").Length)..].Trim();
+        if (tail.StartsWith("на", StringComparison.OrdinalIgnoreCase)) tail = tail[2..].TrimStart(' ', ':', '-');
+        else tail = tail.TrimStart(' ', ':', '-');
+        if (tail.Length == 0) return null;
+
+        var end = tail.IndexOfAny(['.', ';', '\n']);
+        if (end >= 0) tail = tail[..end].TrimEnd();
+        return tail.Length is > 0 and <= 120 ? tail : null;
     }
 
     private static string PickSection(string text, IReadOnlyCollection<string> existingSections)

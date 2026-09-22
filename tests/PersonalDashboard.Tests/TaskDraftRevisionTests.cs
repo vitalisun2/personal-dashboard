@@ -18,6 +18,17 @@ public sealed class TaskDraftRevisionTests
     }
 
     [TestMethod]
+    public async Task LocalAgentRevisionCanChangeExplicitTitle()
+    {
+        var agent = new LocalTaskAgent();
+        var source = new TaskDraft("Проверить экран", "Проверить модальное окно.", "Личный дашборд");
+
+        var revised = await agent.ReviseDraftAsync(source, "замени заголовок на Проверить подтверждение задачи", ["Общее"]);
+
+        Assert.AreEqual("Проверить подтверждение задачи", revised.Title);
+    }
+
+    [TestMethod]
     public void RevisionPromptKeepsCurrentDraftAndCorrection()
     {
         var draft = new TaskDraft("Заголовок", "Описание", "Общее");

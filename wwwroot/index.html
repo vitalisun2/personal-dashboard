@@ -211,13 +211,9 @@
     </form>
   </dialog>
 
-  <dialog id="taskDraftModal" class="modal task-draft-modal" aria-labelledby="taskDraftTitle" aria-describedby="taskDraftHint">
+  <dialog id="taskDraftModal" class="modal task-draft-modal" aria-label="Подтверждение новой задачи" aria-describedby="taskDraftHint">
     <form id="taskDraftForm" class="modal-form">
       <div class="modal-heading">
-        <div>
-          <div class="modal-kicker">Черновик от агента</div>
-          <div class="modal-title" id="taskDraftTitle">Проверьте задачу</div>
-        </div>
         <span id="taskDraftIteration" class="draft-iteration">Вариант 1</span>
       </div>
       <p id="taskDraftHint" class="modal-hint">Задача ещё не сохранена. Подтвердите результат или попросите агента его изменить.</p>
@@ -229,7 +225,6 @@
       <div id="taskDraftStatus" class="draft-status" role="status" aria-live="polite"></div>
       <label class="modal-label" for="taskDraftCorrection">Что изменить?</label>
       <textarea id="taskDraftCorrection" rows="3" maxlength="1200" placeholder="Например: сделай заголовок короче и добавь срок до пятницы"></textarea>
-      <div class="modal-hint">Можно отправлять правки столько раз, сколько нужно. Ctrl+Enter — отправить правку.</div>
       <div class="modal-actions draft-actions">
         <button type="button" id="taskDraftCancel" class="modal-cancel">Отмена</button>
         <button type="submit" id="taskDraftRevise" class="modal-cancel">Отправить правку</button>
