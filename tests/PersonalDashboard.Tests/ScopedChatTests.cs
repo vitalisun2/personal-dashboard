@@ -6,6 +6,58 @@ namespace PersonalDashboard.Tests;
 public sealed class ScopedChatTests
 {
     [TestMethod]
+    public async Task KnowledgeChatAndClassifiersFallBackToOllamaWhenOpenRouterReturnsAnError()
+    {
+        var old = new Dictionary<string, string?>
+        {
+            ["OPENROUTER_API_KEY"] = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY"),
+            ["OPENROUTER_API_KEY_FILE"] = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE"),
+            ["OPENROUTER_URL"] = Environment.GetEnvironmentVariable("OPENROUTER_URL"),
+            ["OPENROUTER_MODEL"] = Environment.GetEnvironmentVariable("OPENROUTER_MODEL"),
+            ["OLLAMA_URL"] = Environment.GetEnvironmentVariable("OLLAMA_URL"),
+            ["OLLAMA_MODEL"] = Environment.GetEnvironmentVariable("OLLAMA_MODEL")
+        };
+        var ollamaBodies = new Queue<string>([
+            "ответ Ollama",
+            "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null}",
+            "{\"decision\":\"approve\",\"confidence\":0.99}"
+        ]);
+        var hosts = new List<string>();
+        var handler = new StubHttpHandler(request =>
+        {
+            hosts.Add(request.RequestUri!.Host);
+            if (request.RequestUri.Host == "openrouter.test") return new HttpResponseMessage(System.Net.HttpStatusCode.PaymentRequired);
+            var content = ollamaBodies.Dequeue();
+            var body = System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } });
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(body) };
+        });
+        foreach (var pair in old) Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", "test-only-key");
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", null);
+        Environment.SetEnvironmentVariable("OPENROUTER_URL", "https://openrouter.test/v1");
+        Environment.SetEnvironmentVariable("OPENROUTER_MODEL", "test/router");
+        Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
+        Environment.SetEnvironmentVariable("OLLAMA_MODEL", "test/local");
+        try
+        {
+            var responder = new ReadOnlyChatResponder(new HttpClient(handler));
+            Assert.AreEqual("ответ Ollama", await responder.ReplyAsync("привет", null, CancellationToken.None));
+            var intent = await ((IKnowledgeIntentRouter)responder).ClassifyAsync("привет", null, CancellationToken.None);
+            Assert.AreEqual("ok", intent.Status);
+            Assert.AreEqual("conversation", intent.Intent!.Kind);
+            var confirmation = await ((IKnowledgeIntentRouter)responder).ClassifyConfirmationAsync("предпросмотр", "да", CancellationToken.None);
+            Assert.AreEqual("ok", confirmation.Status);
+            Assert.AreEqual("approve", confirmation.Decision);
+            CollectionAssert.AreEqual(new[] { "openrouter.test", "ollama.test", "openrouter.test", "ollama.test", "openrouter.test", "ollama.test" }, hosts);
+        }
+        finally
+        {
+            foreach (var pair in old) Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+            handler.Dispose();
+        }
+    }
+
+    [TestMethod]
     public async Task SessionCannotBeReadOrContinuedThroughAnotherScope()
     {
         var store = new MemoryChatStore();
@@ -305,6 +357,11 @@ public sealed class ScopedChatTests
         { if (!_sessions.TryGetValue(id, out var current)) return Task.FromResult<AC.ChatSession?>(null); var updated = current with { Messages = [.. current.Messages, .. messages], UpdatedAt = DateTimeOffset.UtcNow }; _sessions[id] = updated; return Task.FromResult<AC.ChatSession?>(updated); }
         public Task<AC.ChatSession?> SetPendingAsync(Guid id, AC.ChatPending? pending, CancellationToken cancellationToken)
         { if (!_sessions.TryGetValue(id, out var current)) return Task.FromResult<AC.ChatSession?>(null); var updated = current with { Pending = pending, UpdatedAt = DateTimeOffset.UtcNow }; _sessions[id] = updated; return Task.FromResult<AC.ChatSession?>(updated); }
+    }
+
+    private sealed class StubHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(respond(request));
     }
 
     private sealed class FixedResponder : AC.IChatResponder

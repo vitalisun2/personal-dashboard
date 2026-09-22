@@ -35,7 +35,22 @@ internal abstract class HttpLlmProvider(HttpClient http) : ILlmProvider
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         return document.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
     }
-    protected static string? Env(string name, string? fallback) => Environment.GetEnvironmentVariable(name) is { Length: > 0 } value ? value : fallback;
+    protected static string? Env(string name, string? fallback)
+    {
+        if (Environment.GetEnvironmentVariable(name) is { Length: > 0 } value) return value;
+        var filePath = Environment.GetEnvironmentVariable(name + "_FILE");
+        if (!string.IsNullOrWhiteSpace(filePath))
+        {
+            try
+            {
+                var fileValue = File.ReadAllText(filePath).Trim();
+                if (fileValue.Length > 0) return fileValue;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return fallback;
+    }
     protected static object[] ChatMessages(IReadOnlyList<TaskConversationMessage> history) => [new { role = "system", content = "Ты свободный помощник личного дашборда. Отвечай кратко и по существу на вопрос пользователя. Не выполняй никаких действий и не выдумывай доступ к внешним инструментам." }, .. history.Select(message => new { role = message.Role == "agent" ? "assistant" : "user", content = message.Text })];
     private static StringContent Json(object body) => new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
     private static TaskDraft? ExtractDraft(string body, string rawText)

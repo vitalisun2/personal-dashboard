@@ -34,32 +34,61 @@ internal sealed record KnowledgeIntent(string Kind, string? Reference, string? T
 
 sealed class ReadOnlyChatResponder : IChatResponder, IKnowledgeIntentRouter
 {
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
-    public async Task<string> ReplyAsync(string text, IReadOnlyList<ChatMessage>? history, CancellationToken ct)
+    private readonly HttpClient _http;
+    public ReadOnlyChatResponder(HttpClient? http = null) => _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+    private static string? OpenRouterApiKey() => MemoryRepository.ReadApiKey(
+        Environment.GetEnvironmentVariable("OPENROUTER_API_KEY"),
+        Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE"));
+
+    private async Task<string?> CompleteAsync(List<object> messages, double temperature, object? openRouterFormat, CancellationToken ct)
     {
-        var key = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        var key = OpenRouterApiKey();
         if (!string.IsNullOrWhiteSpace(key))
         {
             var url = (Environment.GetEnvironmentVariable("OPENROUTER_URL") ?? "https://openrouter.ai/api/v1").TrimEnd('/') + "/chat/completions";
             var model = Environment.GetEnvironmentVariable("OPENROUTER_MODEL") ?? "deepseek/deepseek-v4-flash-0731";
-            var messages = new List<object> { new { role = "system", content = "Ты полезный помощник личного дашборда. Отвечай кратко и по существу. Не заявляй, что выполнил изменение, если не получил отдельную команду API." } };
-            IReadOnlyList<ChatMessage> context = history is { Count: > 0 } ? history : [new ChatMessage(Guid.NewGuid(), "user", text, DateTimeOffset.UtcNow)];
-            foreach (var message in context) messages.Add(new { role = message.Role == "agent" ? "assistant" : "user", content = message.Text });
-            using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(JsonSerializer.Serialize(new { model, temperature = 0.3, messages }), Encoding.UTF8, "application/json") };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
-            try { using var response = await _http.SendAsync(request, ct); if (response.IsSuccessStatusCode) { using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct)); var answer = payload.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString(); if (!string.IsNullOrWhiteSpace(answer)) return answer.Trim(); } }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch { /* Offline fallback below. */ }
+            var response = await TryCompleteAsync(url, model, key, messages, temperature, openRouterFormat, ct);
+            if (response is not null) return response;
         }
-        return "Сейчас не удалось подключиться к языковой модели, поэтому я не могу ответить на вопрос. Попробуйте позже.";
+
+        var ollamaUrl = (Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://host.docker.internal:11434").TrimEnd('/') + "/v1/chat/completions";
+        var ollamaModel = Environment.GetEnvironmentVariable("OLLAMA_MODEL") ?? "qwen3:4b-instruct-2507-q4_K_M";
+        var ollamaFormat = openRouterFormat is null ? null : new { type = "json_object" };
+        return await TryCompleteAsync(ollamaUrl, ollamaModel, null, messages, temperature, ollamaFormat, ct);
+    }
+
+    private async Task<string?> TryCompleteAsync(string url, string model, string? key, List<object> messages, double temperature, object? responseFormat, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?> { ["model"] = model, ["temperature"] = temperature, ["messages"] = messages };
+        if (responseFormat is not null) body["response_format"] = responseFormat;
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
+        };
+        if (!string.IsNullOrWhiteSpace(key)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        try
+        {
+            using var response = await _http.SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode) return null;
+            using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            var content = payload.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+            return string.IsNullOrWhiteSpace(content) ? null : content.Trim();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return null; }
+    }
+
+    public async Task<string> ReplyAsync(string text, IReadOnlyList<ChatMessage>? history, CancellationToken ct)
+    {
+        var messages = new List<object> { new { role = "system", content = "Ты полезный помощник личного дашборда. Отвечай кратко и по существу. Не заявляй, что выполнил изменение, если не получил отдельную команду API." } };
+        IReadOnlyList<ChatMessage> context = history is { Count: > 0 } ? history : [new ChatMessage(Guid.NewGuid(), "user", text, DateTimeOffset.UtcNow)];
+        foreach (var message in context) messages.Add(new { role = message.Role == "agent" ? "assistant" : "user", content = message.Text });
+        return await CompleteAsync(messages, 0.3, null, ct)
+            ?? "Сейчас не удалось подключиться к языковой модели, поэтому я не могу ответить на вопрос. Попробуйте позже.";
     }
 
     public async Task<(string Status, KnowledgeIntent? Intent)> ClassifyAsync(string text, IReadOnlyList<ChatMessage>? history, CancellationToken ct)
     {
-        var key = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
-        if (string.IsNullOrWhiteSpace(key)) return ("unavailable", null);
-        var url = (Environment.GetEnvironmentVariable("OPENROUTER_URL") ?? "https://openrouter.ai/api/v1").TrimEnd('/') + "/chat/completions";
-        var model = Environment.GetEnvironmentVariable("OPENROUTER_MODEL") ?? "deepseek/deepseek-v4-flash-0731";
         const string schema = "{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"conversation\",\"clarify\",\"create_document\",\"create_section\",\"append_document\",\"replace_document\",\"rename_document\",\"move_document\",\"delete_node\"]},\"reference\":{\"type\":[\"string\",\"null\"]},\"title\":{\"type\":[\"string\",\"null\"]},\"content\":{\"type\":[\"string\",\"null\"]},\"section\":{\"type\":[\"string\",\"null\"]},\"question\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"kind\",\"reference\",\"title\",\"content\",\"section\",\"question\"],\"additionalProperties\":false}";
         using var schemaDocument = JsonDocument.Parse(schema);
         var messages = new List<object>
@@ -69,22 +98,11 @@ sealed class ReadOnlyChatResponder : IChatResponder, IKnowledgeIntentRouter
         if (history is { Count: > 0 })
             foreach (var item in history.TakeLast(8)) messages.Add(new { role = item.Role == "agent" ? "assistant" : "user", content = item.Text });
         else messages.Add(new { role = "user", content = text });
-        using var request = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(JsonSerializer.Serialize(new
-            {
-                model, temperature = 0, messages,
-                response_format = new { type = "json_schema", json_schema = new { name = "knowledge_intent", strict = true, schema = schemaDocument.RootElement } }
-            }), Encoding.UTF8, "application/json")
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        var responseFormat = new { type = "json_schema", json_schema = new { name = "knowledge_intent", strict = true, schema = schemaDocument.RootElement } };
         try
         {
-            using var response = await _http.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode) return ("unavailable", null);
-            using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-            var content = payload.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
-            if (string.IsNullOrWhiteSpace(content)) return ("invalid", null);
+            var content = await CompleteAsync(messages, 0, responseFormat, ct);
+            if (string.IsNullOrWhiteSpace(content)) return ("unavailable", null);
             using var json = JsonDocument.Parse(content);
             var root = json.RootElement;
             string[] keys = ["kind", "reference", "title", "content", "section", "question"];
@@ -101,10 +119,6 @@ sealed class ReadOnlyChatResponder : IChatResponder, IKnowledgeIntentRouter
 
     public async Task<(string Status, string Decision, double Confidence)> ClassifyConfirmationAsync(string preview, string answer, CancellationToken ct)
     {
-        var key = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
-        if (string.IsNullOrWhiteSpace(key)) return ("unavailable", "unclear", 0);
-        var url = (Environment.GetEnvironmentVariable("OPENROUTER_URL") ?? "https://openrouter.ai/api/v1").TrimEnd('/') + "/chat/completions";
-        var model = Environment.GetEnvironmentVariable("OPENROUTER_MODEL") ?? "deepseek/deepseek-v4-flash-0731";
         const string schema = "{\"type\":\"object\",\"properties\":{\"decision\":{\"type\":\"string\",\"enum\":[\"approve\",\"reject\",\"unclear\"]},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1}},\"required\":[\"decision\",\"confidence\"],\"additionalProperties\":false}";
         using var schemaDocument = JsonDocument.Parse(schema);
         var messages = new object[]
@@ -112,18 +126,11 @@ sealed class ReadOnlyChatResponder : IChatResponder, IKnowledgeIntentRouter
             new { role = "system", content = "Классифицируй только ответ пользователя на показанный предпросмотр изменения. approve разрешён только если пользователь явно и недвусмысленно разрешает выполнить именно этот предпросмотр. reject — если явно отказывается, отменяет или просит оставить данные без изменения. Вопрос, условие, сомнение, несвязанный ответ и любое неясное сообщение = unclear. Не трактуй согласие на обсуждение как разрешение на запись. Confidence отражает уверенность в выбранном решении от 0 до 1; при малейшей неоднозначности выбери unclear и низкую уверенность. Верни JSON по схеме." },
             new { role = "user", content = $"Предпросмотр:\n{preview}\n\nОтвет пользователя:\n{answer}" }
         };
-        using var request = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(JsonSerializer.Serialize(new { model, temperature = 0, messages, response_format = new { type = "json_schema", json_schema = new { name = "review_confirmation", strict = true, schema = schemaDocument.RootElement } } }), Encoding.UTF8, "application/json")
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        var responseFormat = new { type = "json_schema", json_schema = new { name = "review_confirmation", strict = true, schema = schemaDocument.RootElement } };
         try
         {
-            using var response = await _http.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode) return ("unavailable", "unclear", 0);
-            using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-            var content = payload.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
-            if (string.IsNullOrWhiteSpace(content)) return ("invalid", "unclear", 0);
+            var content = await CompleteAsync(messages.ToList(), 0, responseFormat, ct);
+            if (string.IsNullOrWhiteSpace(content)) return ("unavailable", "unclear", 0);
             using var json = JsonDocument.Parse(content);
             var root = json.RootElement;
             if (root.ValueKind != JsonValueKind.Object || root.EnumerateObject().Count() != 2 || root.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != 2 || !root.TryGetProperty("decision", out var decision) || !root.TryGetProperty("confidence", out var confidence) || decision.ValueKind != JsonValueKind.String || confidence.ValueKind != JsonValueKind.Number || !confidence.TryGetDouble(out var value) || value is < 0 or > 1)

@@ -46,6 +46,7 @@ docker compose up -d --build
 - Если production-файл задач пропал, приложение восстанавливает `tasks.json.bak`; если нет и его, оно явно сообщает об ошибке вместо запуска с пустым списком.
 - Контейнер видит Ollama хоста через `host.docker.internal:11434` (добавлен `host-gateway`).
 - Общая память агентов берёт ключ из `C:\Main\crystal_wave\Secrets\agent-memory-api-key`. Docker передаёт его в контейнер только для чтения как `/run/secrets/agent-memory-api-key`. На другой машине путь задаётся через `CRYSTAL_WAVE_SECRETS_DIR`.
+- OpenRouter API key хранится вне репозитория в `C:\Main\crystal_wave\Secrets\open-router-api-key-vs-code.txt` и монтируется Docker Compose только для чтения как `/run/secrets/openrouter-api-key`; приложение читает его через `OPENROUTER_API_KEY_FILE`. На другой машине каталог задаётся через `CRYSTAL_WAVE_SECRETS_DIR`. Не помещай ключ в `.env`, исходный код или Git.
 - Для базы знаний можно задать `KNOWLEDGE_FILE` и `KNOWLEDGE_ALLOWED_ORIGINS`; по умолчанию API использует соседний с `TASKS_FILE` файл, создаёт `.bak` и дневные снимки в `archive/ГГГГ-ММ-ДД/knowledge.json` с хранением 30 дней.
 - Для доступа из любой точки: `tailscale serve --bg 8080` (или просто открыть порт в тайлнете) — приложение доступно только устройствам твоей Tailscale-сети, не публичному интернету.
 
