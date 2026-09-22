@@ -49,10 +49,15 @@
     $('#taskDraftStatus').textContent = message;
   }
 
-  function openTaskDraft(draft) {
-    taskDraftSession = { draft, iteration: 1 };
+  function openTaskDraft(draft, editingTaskId = null) {
+    taskDraftSession = { draft, iteration: 1, editingTaskId };
     $('#taskDraftCorrection').value = '';
     setTaskDraftBusy(false);
+    const editing = editingTaskId != null;
+    $('#taskDraftHint').textContent = editing
+      ? 'Изменения применятся к задаче после подтверждения. Можно попросить агента поправить ещё раз.'
+      : 'Задача ещё не сохранена. Подтвердите результат или попросите агента его изменить.';
+    $('#taskDraftConfirm').textContent = editing ? 'ОК, применить' : 'ОК, добавить';
     renderTaskDraft();
     $('#taskDraftModal').showModal();
     $('#taskDraftCorrection').focus();
@@ -87,8 +92,19 @@
 
   async function confirmTaskDraft() {
     if (!taskDraftSession) return;
-    setTaskDraftBusy(true, 'Добавляем задачу…');
+    const editingTaskId = taskDraftSession.editingTaskId;
+    setTaskDraftBusy(true, editingTaskId != null ? 'Применяем правку…' : 'Добавляем задачу…');
     try {
+      if (editingTaskId != null) {
+        const updated = await api(`/api/tasks/${editingTaskId}/edit`, { method: 'PUT', body: JSON.stringify({ draft: taskDraftSession.draft }) });
+        const current = state.tasks.find(x => x.id === editingTaskId);
+        if (current) Object.assign(current, updated, { section: normalizeSection(updated.section) });
+        closeTaskDraft();
+        renderTasks();
+        if (state.selectedTaskId === editingTaskId) showTaskDetail(current ?? updated);
+        showToast('Задача обновлена');
+        return;
+      }
       const item = await api('/api/tasks/confirm', { method: 'POST', body: JSON.stringify({ draft: taskDraftSession.draft }) });
       state.tasks.unshift({ ...item, section: normalizeSection(item.section) });
       $('#taskInput').value = '';
@@ -248,14 +264,16 @@
   function showTaskDetail(task) {
     cancelDescriptionEdit();
     cancelTitleEdit();
+    cancelAgentEdit();
     state.selectedTaskId=task.id; $('#listView').classList.add('hidden'); $('#detailView').classList.remove('hidden');
     $('#detailSection').textContent=normalizeSection(task.section); $('#detailTitle').textContent=task.title; $('#detailDescription').textContent=task.description;
     const actions=$('#detailActions'); actions.replaceChildren();
     const move=document.createElement('button'); move.type='button'; move.className='detail-move'; move.dataset.taskMove=task.id; move.textContent=task.bucket==='backlog'?'→ Сегодня':'← Backlog'; actions.append(move);
     if(task.bucket==='today'){const b=document.createElement('button');b.type='button';b.className='detail-status';b.dataset.taskAdvance=task.id;b.textContent=statusLabel[task.status];actions.append(b);}
+    const agentEdit=document.createElement('button'); agentEdit.type='button'; agentEdit.className='detail-edit-agent'; agentEdit.dataset.taskEditAgent=task.id; agentEdit.textContent='Редактировать с агентом'; actions.append(agentEdit);
     const del=document.createElement('button');del.type='button';del.className='detail-delete';del.dataset.taskDelete=task.id;del.textContent='Удалить';actions.append(del);
   }
-  function closeTaskDetail(){state.selectedTaskId=null;$('#detailView').classList.add('hidden');$('#listView').classList.remove('hidden');}
+  function closeTaskDetail(){cancelAgentEdit();state.selectedTaskId=null;$('#detailView').classList.add('hidden');$('#listView').classList.remove('hidden');}
   async function moveTask(id){const t=state.tasks.find(x=>x.id===id);if(!t)return;const updated=await api(`/api/tasks/${id}/bucket`,{method:'PUT',body:JSON.stringify({bucket:t.bucket==='backlog'?'today':'backlog'})});Object.assign(t,updated,{section:normalizeSection(updated.section)});renderTasks();if(state.selectedTaskId===id){showTaskDetail(t);navigate({main:'tasks',taskTab:t.bucket,filter:'all',taskId:id},{replace:true});}}
   async function advanceTask(id){const t=state.tasks.find(x=>x.id===id);if(!t)return;const r=await api(`/api/tasks/${id}/advance`,{method:'PUT',body:'{}'});if(r.deleted){state.tasks=state.tasks.filter(x=>x.id!==id);if(state.selectedTaskId===id)navigate({main:'tasks',taskTab:state.taskTab,filter:state.taskFilter},{replace:true});}else Object.assign(t,r,{section:normalizeSection(r.section)});renderTasks();if(state.selectedTaskId===id&&state.tasks.includes(t))showTaskDetail(t);}
   async function deleteTask(id){if(!confirm('Удалить задачу?'))return;const t=state.tasks.find(x=>x.id===id);if(!t)return;await api(`/api/tasks/${id}`,{method:'DELETE'});state.tasks=state.tasks.filter(x=>x.id!==id);if(state.selectedTaskId===id)navigate({main:'tasks',taskTab:state.taskTab,filter:state.taskFilter},{replace:true});renderTasks();showToast('Задача удалена');}
@@ -339,6 +357,53 @@
     renderTasks();
     if (state.selectedTaskId === id) { $('#detailTitle').textContent = updated.title; }
     showToast('Заголовок сохранён');
+  }
+
+  // -------- Агент-редактирование задачи (заголовок / описание / раздел) --------
+  function beginAgentEdit() {
+    if (state.agentEditing || !state.selectedTaskId) return;
+    const task = state.tasks.find(x => x.id === state.selectedTaskId); if (!task) return;
+    cancelDescriptionEdit(); cancelTitleEdit();
+    const panel = document.createElement('form');
+    panel.id = 'agentEditPanel'; panel.className = 'agent-edit-panel';
+    const input = document.createElement('textarea');
+    input.id = 'agentEditInput'; input.className = 'description-input';
+    input.placeholder = 'Опишите, что изменить: заголовок, описание или раздел…';
+    input.setAttribute('rows', '2');
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); cancelAgentEdit(); }
+      else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitAgentEdit().catch(err => showToast(err.message)); }
+    });
+    const actions = document.createElement('div'); actions.className = 'agent-edit-actions';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'modal-cancel'; cancel.textContent = 'Отмена';
+    cancel.addEventListener('click', cancelAgentEdit);
+    const send = document.createElement('button'); send.type = 'submit'; send.className = 'primary'; send.textContent = 'Отправить агенту';
+    actions.append(cancel, send);
+    panel.append(input, actions);
+    panel.addEventListener('submit', e => { e.preventDefault(); submitAgentEdit().catch(err => showToast(err.message)); });
+    state.agentEditing = true;
+    $('#detailActions').before(panel);
+    input.focus();
+  }
+  function cancelAgentEdit() {
+    if (!state.agentEditing) return;
+    $('#agentEditPanel')?.remove();
+    state.agentEditing = false;
+  }
+  async function submitAgentEdit() {
+    if (!state.agentEditing || !state.selectedTaskId) return;
+    const input = $('#agentEditInput'); const id = state.selectedTaskId;
+    const text = input.value.trim();
+    if (!text) { input.focus(); showToast('Опишите, что нужно изменить.'); return; }
+    input.disabled = true;
+    try {
+      const draft = await api(`/api/tasks/${id}/edit`, { method: 'POST', body: JSON.stringify({ text }) });
+      cancelAgentEdit();
+      openTaskDraft(draft, id);
+    } catch (err) {
+      input.disabled = false;
+      showToast(err.message);
+    }
   }
 
   // -------- Переименование раздела: долгое нажатие на заголовок группы --------
@@ -766,6 +831,7 @@
       const o=e.target.closest('[data-task-open]');if(o){const t=state.tasks.find(x=>x.id===o.dataset.taskOpen);if(t)navigate({main:'tasks',taskTab:t.bucket,filter:'all',taskId:t.id});return;}
       const m=e.target.closest('[data-task-move]');if(m){await moveTask(m.dataset.taskMove);return;}
       const a=e.target.closest('[data-task-advance]');if(a){await advanceTask(a.dataset.taskAdvance);return;}
+      const ae=e.target.closest('[data-task-edit-agent]');if(ae){beginAgentEdit();return;}
       const d=e.target.closest('[data-task-delete]');if(d){await deleteTask(d.dataset.taskDelete);return;}
       const l=e.target.closest('[data-lesson-open]');if(l){navigate({main:'memory',memoryTab:'lessons',lessonId:l.dataset.lessonOpen});return;}
       const pr=e.target.closest('[data-problem-open]');if(pr){navigate({main:'memory',memoryTab:'problems',problemId:pr.dataset.problemOpen});return;}

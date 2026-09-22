@@ -168,6 +168,50 @@ app.MapPut("/api/tasks/{id:guid}/section", async (Guid id, UpdateSectionRequest 
     return updated is not null ? Results.Ok(updated) : Results.NotFound();
 });
 
+// Агент-редактирование существующей задачи: черновик правки (title/description/section)
+app.MapPost("/api/tasks/{id:guid}/edit", async (Guid id, EditTaskRequest request, TaskStore store, ITaskAgent agent) =>
+{
+    var item = await store.GetAsync(id);
+    if (item is null) return Results.NotFound();
+
+    var instruction = request.Text?.Trim();
+    if (string.IsNullOrWhiteSpace(instruction))
+        return Results.BadRequest(new { message = "Опишите, что нужно изменить в задаче." });
+
+    var sections = (await store.GetAllAsync())
+        .Select(x => string.IsNullOrWhiteSpace(x.Section) ? "Общее" : x.Section)
+        .Append("Общее")
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    var draft = await agent.EditDraftAsync(new TaskDraft(item.Title, item.Description, item.Section), instruction, sections);
+    return Results.Ok(draft);
+});
+
+// Подтверждение агент-правки: применяет к задаче заголовок, описание и раздел.
+// Если модель вернула существующий раздел в другом регистре — используем каноничное имя.
+app.MapPut("/api/tasks/{id:guid}/edit", async (Guid id, ConfirmTaskDraftRequest request, TaskStore store) =>
+{
+    if (!IsValidDraft(request.Draft))
+        return Results.BadRequest(new { message = "Черновик правки неполный. Повторите редактирование." });
+
+    var section = request.Draft!.Section.Trim();
+    var existingSections = (await store.GetAllAsync())
+        .Select(x => string.IsNullOrWhiteSpace(x.Section) ? "Общее" : x.Section)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    var matchedSection = existingSections.FirstOrDefault(s => s.Equals(section, StringComparison.OrdinalIgnoreCase));
+    if (matchedSection is not null) section = matchedSection;
+
+    var updated = await store.UpdateAsync(id, task => task with
+    {
+        Title = request.Draft!.Title.Trim(),
+        Description = request.Draft.Description.Trim(),
+        Section = section
+    });
+    return updated is null ? Results.NotFound() : Results.Ok(updated);
+});
+
 // Переименование раздела: новое название применяется ко всем задачам этого раздела
 app.MapPut("/api/tasks/sections/rename", async (RenameSectionRequest request, TaskStore store) =>
 {
@@ -238,6 +282,7 @@ record ConfirmTaskDraftRequest(TaskDraft? Draft);
 record UpdateDescriptionRequest(string? Description);
 record UpdateTitleRequest(string? Title);
 record UpdateSectionRequest(string? Section);
+record EditTaskRequest(string? Text);
 record MoveTaskRequest(TaskBucket Bucket);
 record RenameSectionRequest(string? OldName, string? NewName);
 record ReorderTasksRequest(TaskBucket Bucket, string? Section, IReadOnlyList<Guid>? TaskIds);
@@ -252,6 +297,7 @@ interface ITaskAgent
 {
     Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections);
     Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections);
+    Task<TaskDraft> EditDraftAsync(TaskDraft current, string instruction, IReadOnlyCollection<string> existingSections);
 }
 
 // ── LLM-агент с каскадом провайдеров ────────────────────────────────────────
@@ -324,6 +370,37 @@ sealed class LlmTaskAgent : ITaskAgent
         }
         _logger.LogInformation("Все LLM-провайдеры недоступны, правка добавлена локальным агентом");
         return await _fallback.ReviseDraftAsync(draft, correction, existingSections);
+    }
+
+    public async Task<TaskDraft> EditDraftAsync(TaskDraft current, string instruction, IReadOnlyCollection<string> existingSections)
+    {
+        var editRequest = BuildEditRequest(current, instruction);
+        foreach (var provider in _providers)
+        {
+            try
+            {
+                var edited = await provider.TryParseAsync(editRequest, existingSections);
+                if (edited is not null)
+                {
+                    // Страховка: при правке описания модель не должна «забывать» раздел
+                    // и уводить задачу в «Общее», если пользователь про перенос не просил.
+                    if (edited.Section.Equals("Общее", StringComparison.OrdinalIgnoreCase)
+                        && !current.Section.Equals("Общее", StringComparison.OrdinalIgnoreCase)
+                        && !LocalTaskAgent.MentionsSectionMove(instruction, existingSections))
+                    {
+                        edited = edited with { Section = current.Section };
+                    }
+                    _logger.LogInformation("Правка задачи подготовлена провайдером {Provider}", provider.Name);
+                    return edited;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Провайдер {Provider} не подготовил правку: {Message}", provider.Name, ex.Message);
+            }
+        }
+        _logger.LogInformation("Все LLM-провайдеры недоступны, правка задачи выполнена локальным агентом");
+        return await _fallback.EditDraftAsync(current, instruction, existingSections);
     }
 }
 
@@ -526,6 +603,62 @@ sealed class LocalTaskAgent : ITaskAgent
         });
     }
 
+    public Task<TaskDraft> EditDraftAsync(TaskDraft current, string instruction, IReadOnlyCollection<string> existingSections)
+    {
+        // Без сети локальный агент применяет явные правки: замену заголовка и перенос
+        // в раздел (существующий или новый). Прочие формулировочные правки сохраняются
+        // как уточнение к описанию, чтобы результат был виден пользователю.
+        var note = string.Join(' ', instruction.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var revisedTitle = TryExtractExplicitTitle(note) ?? current.Title;
+        var requestedSection = TryExtractSection(note, existingSections);
+        var section = requestedSection ?? current.Section;
+
+        var description = current.Description;
+        if (revisedTitle.Equals(current.Title) && requestedSection is null)
+            description = current.Description + "\n\nУточнение: " + note;
+        return Task.FromResult(new TaskDraft(revisedTitle, description, section));
+    }
+
+    // Достаёт название раздела из правки: «перенеси в раздел Workflow», «создай раздел Дизайн».
+    // Существующий раздел возвращается в каноничном написании; новый — как есть (до 40 символов).
+    static string? TryExtractSection(string note, IReadOnlyCollection<string> existingSections)
+    {
+        var lower = note.ToLowerInvariant();
+        var marker = lower.IndexOf("раздел", StringComparison.Ordinal);
+        var markerLength = marker >= 0 ? "раздел".Length : -1;
+        if (marker < 0)
+        {
+            marker = lower.IndexOf("секци", StringComparison.Ordinal);
+            markerLength = marker >= 0 ? 5 : -1;
+        }
+        if (marker < 0) return null;
+
+        var tail = note[(marker + markerLength)..].TrimStart(' ', ':', '-');
+        if (tail.StartsWith("на", StringComparison.OrdinalIgnoreCase)) tail = tail[2..].TrimStart(' ', ':', '-');
+        else if (tail.StartsWith("в ", StringComparison.OrdinalIgnoreCase)) tail = tail[2..].TrimStart(' ', ':', '-');
+
+        var cut = tail.IndexOfAny(['.', ';', '\n', '!', '?']);
+        if (cut < 0) cut = tail.IndexOf(" на ", StringComparison.OrdinalIgnoreCase);
+        if (cut < 0) cut = tail.IndexOf(" чтобы", StringComparison.OrdinalIgnoreCase);
+        if (cut < 0) cut = tail.IndexOf(" и ", StringComparison.OrdinalIgnoreCase);
+        if (cut >= 0) tail = tail[..cut].TrimEnd();
+        if (tail.Length == 0) return null;
+        if (tail.Length > 40) tail = tail[..40].TrimEnd();
+
+        var existing = existingSections.FirstOrDefault(s => s.Equals(tail, StringComparison.OrdinalIgnoreCase));
+        return existing is not null ? existing : tail;
+    }
+
+    // Правка явно просит перенести задачу или называет существующий раздел —
+    // используется как признак того, что «Общее» от модели является осознанным выбором.
+    public static bool MentionsSectionMove(string instruction, IReadOnlyCollection<string> existingSections)
+    {
+        var lower = instruction.ToLowerInvariant();
+        string[] markers = ["раздел", "секци", "перенес", "перемест", "переведи"];
+        if (markers.Any(lower.Contains)) return true;
+        return existingSections.Any(section => section.Length > 2 && lower.Contains(section.ToLowerInvariant()));
+    }
+
     private static string? TryExtractExplicitTitle(string correction)
     {
         var lower = correction.ToLowerInvariant();
@@ -586,8 +719,9 @@ static class TaskPrompt
 {
     public const string Instructions =
         "Ты — помощник личного дашборда задач. Из надиктованного пользователем текста задачи выдели: " +
-        "короткий заголовок (2-6 слов, без точки в конце); подробное описание (1-3 предложения, " +
-        "пересказ своими словами с сохранением всех деталей и фактов исходного текста); " +
+        "короткий заголовок (2-6 слов, без точки в конце); лаконичное описание (1-3 коротких предложения, " +
+        "кратко и по делу: только суть и факты исходного текста, ничего не теряя и ничего не добавляя; " +
+        "без канцелярита, приветствий и лишних деталей); " +
         "раздел — выбери один из СПИСКА существующих разделов, если текст явно про него; " +
         "выбирай САМЫЙ ТОЧНЫЙ ПОЛНЫЙ вариант из списка: например «Super Abilities UI» — это отдельный раздел, " +
         "а не «Super Abilities»; " +
@@ -601,11 +735,25 @@ static class TaskPrompt
 
     public static string BuildRevisionRequest(TaskDraft draft, string correction) =>
         "Обнови черновик задачи по правке пользователя. Сохрани все детали, которые правка не отменяет. " +
+        "Если правка просит перенести задачу в другой раздел или создать новый — обнови раздел. " +
+        "Описание держи кратким и лаконичным: только суть и факты, без выдуманных деталей. " +
         "Верни только итоговый JSON по системной инструкции.\n\nТекущий черновик:\n" +
         JsonSerializer.Serialize(draft, new JsonSerializerOptions
         {
             Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         }) + "\n\nПравка пользователя:\n" + correction;
+
+    public static string BuildEditRequest(TaskDraft current, string instruction) =>
+        "Обнови существующую задачу по указанию пользователя. Правка может касаться заголовка, описания или раздела. " +
+        "Применяй только запрошенные изменения: не меняй заголовок, если пользователь просит изменить только описание, и наоборот. " +
+        "Если правка просит перенести задачу в другой раздел — выбери его из списка существующих разделов; " +
+        "если названного раздела нет — создай новое короткое название (2-4 слова). " +
+        "Описание держи кратким и лаконичным: только суть и факты, без выдуманных деталей. " +
+        "Верни только итоговый JSON по системной инструкции.\n\nТекущая задача:\n" +
+        JsonSerializer.Serialize(current, new JsonSerializerOptions
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        }) + "\n\nУказание пользователя:\n" + instruction;
 
     public static readonly JsonElement Schema = JsonDocument.Parse(
         "{\"type\":\"object\",\"properties\":{" +
