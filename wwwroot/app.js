@@ -134,6 +134,7 @@
       const memoryTab = memoryTabs.has(parts[1]) ? parts[1] : 'overview';
       return { main: 'memory', memoryTab, lessonId: params.get('lesson'), problemId: params.get('problem'), skillId: params.get('skill') };
     }
+    if (parts[0] === 'knowledge' && parts[1] === 'chat') return { main: 'knowledge', chat: true, sessionId: params.get('session') };
     if (parts[0] === 'knowledge') return { main: 'knowledge' };
 
     if (parts[0] === 'tasks' && parts[1] === 'chat') return { main: 'tasks', chat: true, sessionId: params.get('session') };
@@ -153,7 +154,7 @@
       if (route.skillId) params.set('skill', route.skillId);
       return `#/memory/${route.memoryTab || 'overview'}${params.size ? `?${params}` : ''}`;
     }
-    if (route.chat) return `#/tasks/chat${route.sessionId ? `?session=${encodeURIComponent(route.sessionId)}` : ''}`;
+    if (route.chat) return `#/${route.main}/chat${route.sessionId ? `?session=${encodeURIComponent(route.sessionId)}` : ''}`;
     if (route.main === 'knowledge') return '#/knowledge';
     if (route.filter && route.filter !== 'all') params.set('filter', route.filter);
     if (route.taskId) params.set('task', route.taskId);
@@ -175,6 +176,17 @@
   }
 
   function applyRoute(route) {
+    $('#chatView').classList.toggle('hidden', !route.chat);
+    if (route.chat) {
+      setMain(route.main);
+      $('#tasksSection').classList.add('hidden');
+      $('#memorySection').classList.add('hidden');
+      $('#knowledgeSection').classList.add('hidden');
+      closeTaskDetail(); $('#listView').classList.add('hidden');
+      syncMobileChatViewport();
+      loadChat(route.main, route.sessionId);
+      return;
+    }
     if (route.main === 'knowledge') { setMain('knowledge'); closeKnowledgeDocument().catch(e=>showToast(e.message)); return; }
     if (route.main === 'memory') {
       setMain('memory');
@@ -189,7 +201,6 @@
     state.taskTab = route.taskTab;
     state.taskFilter = route.filter;
     setMain('tasks');
-    if (route.chat) { closeTaskDetail(); $('#listView').classList.add('hidden'); $('#chatView').classList.remove('hidden'); syncMobileChatViewport(); loadChat(route.sessionId); return; }
     $('#chatView').classList.add('hidden');
     syncMobileChatViewport();
     const task = route.taskId && state.tasks.find(item => String(item.id) === String(route.taskId));
@@ -203,9 +214,11 @@
     }
   }
 
-  async function loadChat(sessionId) {
+  let chatScope = 'tasks';
+  async function loadChat(scope, sessionId) {
+    chatScope = scope || 'tasks';
     if (!sessionId) { renderChat({ messages: [] }); requestAnimationFrame(() => $('#chatInput').focus()); return; }
-    const data = await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
+    const data = await api(`/api/${chatScope}/chat/sessions/${encodeURIComponent(sessionId)}`);
     renderChat(data);
     $('#chatInput').focus();
   }
@@ -240,10 +253,10 @@
   async function sendChatMessage(text) {
     const route = parseRoute();
     const data = route.sessionId
-      ? await api(`/api/chat/sessions/${encodeURIComponent(route.sessionId)}/messages`, { method: 'POST', body: JSON.stringify({ text }) })
-      : await api('/api/chat/sessions', { method: 'POST', body: JSON.stringify({ text }) });
+      ? await api(`/api/${chatScope}/chat/sessions/${encodeURIComponent(route.sessionId)}/messages`, { method: 'POST', body: JSON.stringify({ text }) })
+      : await api(`/api/${chatScope}/chat/sessions`, { method: 'POST', body: JSON.stringify({ text }) });
     const sessionId = data.session.id;
-    if (!route.sessionId) navigate({ main: 'tasks', chat: true, sessionId }, { replace: true });
+    if (!route.sessionId) navigate({ main: chatScope, chat: true, sessionId }, { replace: true });
     renderChat(data.session);
   }
 
@@ -1047,8 +1060,9 @@
     $('#detailDescription').addEventListener('click', beginDescriptionEdit);
     $('#detailTitle').addEventListener('click', beginTitleEdit);
   $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();navigate({main:'tasks',chat:true,sessionId:null},{replace:false});if(!text)return;btn.disabled=true;btn.classList.add('sending');try{$('#taskInput').value='';await sendChatMessage(text);}catch(err){showToast(err.message);navigate({main:'tasks',taskTab:'backlog',filter:'all'},{replace:true});}finally{btn.disabled=false;btn.classList.remove('sending');}});
+  $('#knowledgeChatForm').addEventListener('submit',async e=>{e.preventDefault();const input=$('#knowledgeChatInput');const text=input.value.trim();input.value='';navigate({main:'knowledge',chat:true,sessionId:null},{replace:false});if(text)try{await sendChatMessage(text);}catch(err){showToast(err.message);}});
   $('#chatForm').addEventListener('submit',async e=>{e.preventDefault();const input=$('#chatInput');const text=input.value.trim();if(!text)return;input.value='';try{await sendChatMessage(text);}catch(err){showToast(err.message);}});
-  $('#chatBackButton').addEventListener('click',()=>navigate({main:'tasks',taskTab:'backlog',filter:'all'}));
+  $('#chatBackButton').addEventListener('click',()=>navigate(chatScope==='tasks'?{main:'tasks',taskTab:'backlog',filter:'all'}:{main:'knowledge'}));
   $('#taskDraftForm').addEventListener('submit', e => { e.preventDefault(); reviseTaskDraft(); });
   $('#taskDraftConfirm').addEventListener('click', confirmTaskDraft);
   $('#taskDraftCancel').addEventListener('click', closeTaskDraft);

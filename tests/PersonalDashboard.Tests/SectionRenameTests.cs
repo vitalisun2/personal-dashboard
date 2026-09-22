@@ -19,7 +19,7 @@ public sealed class SectionRenameTests
     }
 
     private static TaskItem NewTask(string section) => new(
-        Guid.NewGuid(), "Задача", "Описание", section, TaskBucket.Backlog, TaskStatus.New, DateTimeOffset.UtcNow);
+        Guid.NewGuid(), "Задача", "Описание", section, TaskBucket.Backlog, TaskBoard.Domain.TaskStatus.New, DateTimeOffset.UtcNow);
 
     [TestMethod]
     public async Task RenamesEveryTaskInSection()

@@ -22,7 +22,7 @@ public sealed class TaskTitleTests
             "Описание задачи",
             "Общее",
             TaskBucket.Backlog,
-            TaskStatus.New,
+            TaskBoard.Domain.TaskStatus.New,
             DateTimeOffset.UtcNow);
 
         await store.AddAsync(item);

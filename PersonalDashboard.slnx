@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/tests/">
+    <Project Path="tests/PersonalDashboard.Tests/PersonalDashboard.Tests.csproj" />
+  </Folder>
+  <Project Path="AgentChat/AgentChat.csproj" />
+  <Project Path="KnowledgeBase.Api/KnowledgeBase.Api.csproj" />
+  <Project Path="PersonalDashboard.csproj" />
+  <Project Path="TaskBoard/TaskBoard.csproj" />
+</Solution>

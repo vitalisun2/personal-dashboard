@@ -52,15 +52,6 @@
           <div id="emptyState" class="empty hidden">Здесь пока нет задач.</div>
         </section>
 
-        <section id="chatView" class="chat-view hidden" aria-label="Чат с агентом">
-          <div class="detail-backbar"><button id="chatBackButton" class="back-button" type="button">← Backlog</button></div>
-          <div class="chat-inner">
-            <h1>Chat</h1>
-            <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
-            <form id="chatForm" class="chat-form"><input id="chatInput" type="text" maxlength="2000" placeholder="Напишите сообщение…" autocomplete="off"><button class="primary" type="submit">Отправить</button></form>
-          </div>
-        </section>
-
         <section id="detailView" class="detail hidden">
           <div class="detail-backbar"><button id="backButton" class="back-button" type="button">← Назад</button></div>
           <div class="detail-inner">
@@ -70,6 +61,15 @@
             <div id="detailActions" class="detail-actions"></div>
           </div>
         </section>
+      </section>
+
+      <section id="chatView" class="chat-view hidden" aria-label="Чат с агентом">
+        <div class="detail-backbar"><button id="chatBackButton" class="back-button" type="button">← Назад</button></div>
+        <div class="chat-inner">
+          <h1>Chat</h1>
+          <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+          <form id="chatForm" class="chat-form"><input id="chatInput" type="text" maxlength="2000" placeholder="Напишите сообщение…" autocomplete="off"><button class="primary" type="submit">Отправить</button></form>
+        </div>
       </section>
 
       <section id="memorySection" class="hidden">
@@ -203,6 +203,7 @@
               </section>
       <section id="knowledgeSection" class="hidden">
         <header class="memory-head knowledge-head"><div><div class="eyebrow">БАЗА ЗНАНИЙ</div><h1>База знаний</h1></div><div class="knowledge-actions"><button id="knowledgeCollapseAll" class="icon-button" type="button" aria-label="Свернуть всё"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6 10 2 16 6 M4 14 10 18 16 14"/></svg><span class="knowledge-control-label">Свернуть всё</span></button><button id="knowledgeExpandAll" class="icon-button" type="button" aria-label="Развернуть всё"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 2 10 6 16 2 M4 18 10 14 16 18"/></svg><span class="knowledge-control-label">Развернуть всё</span></button></div></header>
+        <form id="knowledgeChatForm" class="add-form"><input id="knowledgeChatInput" type="text" maxlength="2000" placeholder="Опишите документ или задайте вопрос агенту…" autocomplete="off"><button class="primary" type="submit">Chat</button></form>
         <div class="knowledge-layout"><section id="knowledgeTree" class="knowledge-tree" aria-label="Дерево базы знаний"></section><section id="knowledgeDocument" class="knowledge-document hidden"><button id="knowledgeBack" class="back-button" type="button">← К дереву</button><div class="knowledge-document-head"><h2 id="knowledgeDocumentTitle" class="knowledge-title"></h2><div class="knowledge-mode"><button id="knowledgeModeToggle" type="button">Редактирование</button></div></div><article id="knowledgePreview" class="knowledge-preview"></article><textarea id="knowledgeEditor" class="knowledge-editor hidden" spellcheck="false"></textarea></section></div>
       </section>
 

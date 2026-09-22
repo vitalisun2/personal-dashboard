@@ -7,8 +7,12 @@
   <ItemGroup>
       <InternalsVisibleTo Include="PersonalDashboard.Tests" />
       <ProjectReference Include="KnowledgeBase.Api\KnowledgeBase.Api.csproj" />
+      <ProjectReference Include="AgentChat\AgentChat.csproj" />
+      <ProjectReference Include="TaskBoard\TaskBoard.csproj" />
       <Compile Remove="tests/**" />
       <Compile Remove="KnowledgeBase.Api/**" />
+      <Compile Remove="AgentChat/**" />
+      <Compile Remove="TaskBoard/**" />
       <Content Remove="tests/**" />
       <EmbeddedResource Remove="tests/**" />
       <None Remove="tests/**" />

@@ -11,13 +11,18 @@
     <PackageReference Include="MSTest" Version="4.0.2" />
   </ItemGroup>
 
-  <ItemGroup>
+    <ItemGroup>
       <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+      <Using Include="TaskBoard" />
+      <Using Include="TaskBoard.Application" />
+      <Using Include="TaskBoard.Domain" />
+      <Using Include="TaskBoard.Infrastructure" />
     </ItemGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\..\PersonalDashboard.csproj" />
       <ProjectReference Include="..\..\KnowledgeBase.Api\KnowledgeBase.Api.csproj" />
+      <ProjectReference Include="..\..\TaskBoard\TaskBoard.csproj" />
     </ItemGroup>
 
   </Project>

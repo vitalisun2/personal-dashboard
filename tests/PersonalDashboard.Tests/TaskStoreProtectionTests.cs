@@ -5,7 +5,7 @@ public sealed class TaskStoreProtectionTests
 {
     private static TaskItem NewTask() => new(
         Guid.NewGuid(), "Задача", "Описание", "Общее",
-        TaskBucket.Backlog, TaskStatus.New, DateTimeOffset.UtcNow);
+        TaskBucket.Backlog, TaskBoard.Domain.TaskStatus.New, DateTimeOffset.UtcNow);
 
     [TestMethod]
     public async Task MissingPrimaryRestoresLastBackup()

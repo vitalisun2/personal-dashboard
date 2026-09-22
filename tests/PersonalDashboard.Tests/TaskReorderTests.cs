@@ -4,7 +4,7 @@ namespace PersonalDashboard.Tests;
 public sealed class TaskReorderTests
 {
     private static TaskItem NewTask(string section) => new(
-        Guid.NewGuid(), "Задача", "Описание", section, TaskBucket.Backlog, TaskStatus.New, DateTimeOffset.UtcNow);
+        Guid.NewGuid(), "Задача", "Описание", section, TaskBucket.Backlog, TaskBoard.Domain.TaskStatus.New, DateTimeOffset.UtcNow);
 
     private static TaskStore NewStore()
     {
