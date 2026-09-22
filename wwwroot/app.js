@@ -278,6 +278,7 @@
 
   const bottomNavOrderKey = 'personalDashboardBottomNavOrder';
   let bottomNavGesture = null;
+  let bottomNavAnimationFrame = 0;
 
   function restoreBottomNavOrder() {
     const nav = $('.bottom-nav');
@@ -302,15 +303,34 @@
     nav.classList.toggle('has-right', nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 2);
   }
 
-  function snapBottomNav() {
+  function snapBottomNav(velocityX = 0) {
     const nav = $('.bottom-nav');
     if (!nav || nav.scrollWidth <= nav.clientWidth) return;
     const buttons = [...nav.querySelectorAll('.bottom-item')];
     if (buttons.length < 2) return;
     const step = buttons[1].getBoundingClientRect().left - buttons[0].getBoundingClientRect().left;
     if (!step) return;
-    const target = Math.max(0, Math.min(nav.scrollWidth - nav.clientWidth, Math.round(nav.scrollLeft / step) * step));
-    nav.scrollTo({ left: target, behavior: 'smooth' });
+    const projected = nav.scrollLeft - velocityX * 180;
+    const target = Math.max(0, Math.min(nav.scrollWidth - nav.clientWidth, Math.round(projected / step) * step));
+    cancelAnimationFrame(bottomNavAnimationFrame);
+    const start = nav.scrollLeft;
+    const distance = target - start;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches || Math.abs(distance) < 1) {
+      nav.scrollLeft = target;
+      updateBottomNavIndicators();
+      return;
+    }
+    const startedAt = performance.now();
+    const duration = Math.min(360, Math.max(220, Math.abs(distance) * 0.55));
+    const animate = now => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - (1 - progress) ** 3;
+      nav.scrollLeft = start + distance * eased;
+      updateBottomNavIndicators();
+      if (progress < 1) bottomNavAnimationFrame = requestAnimationFrame(animate);
+      else bottomNavAnimationFrame = 0;
+    };
+    bottomNavAnimationFrame = requestAnimationFrame(animate);
   }
 
   function initBottomNavGestures() {
@@ -322,10 +342,13 @@
       if (event.button !== 0 || bottomNavGesture) return;
       const button = event.target.closest('.bottom-item');
       event.preventDefault();
+      cancelAnimationFrame(bottomNavAnimationFrame);
+      bottomNavAnimationFrame = 0;
       nav.dataset.suppressClick = 'false';
       const gesture = bottomNavGesture = {
         button, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
         startScrollLeft: nav.scrollLeft, dragging: false, moved: false, armed: false,
+        lastX: event.clientX, lastTime: event.timeStamp, velocityX: 0,
         ghost: null, dropTarget: null, offsetX: 0, offsetY: 0,
         timer: button ? setTimeout(() => { if (bottomNavGesture === gesture) gesture.armed = true; }, 420) : null
       };
@@ -336,6 +359,11 @@
       if (!gesture || gesture.pointerId !== event.pointerId) return;
       const dx = event.clientX - gesture.startX;
       const dy = event.clientY - gesture.startY;
+      const elapsed = Math.max(1, event.timeStamp - gesture.lastTime);
+      const sampleVelocity = (event.clientX - gesture.lastX) / elapsed;
+      gesture.velocityX = gesture.velocityX * 0.65 + sampleVelocity * 0.35;
+      gesture.lastX = event.clientX;
+      gesture.lastTime = event.timeStamp;
       if (!gesture.dragging && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
         gesture.moved = true;
         if (gesture.armed && gesture.button) {
@@ -390,7 +418,7 @@
         saveBottomNavOrder();
       }
       if (gesture.moved || gesture.dragging || gesture.armed) nav.dataset.suppressClick = 'true';
-      if (gesture.moved && !gesture.dragging) setTimeout(snapBottomNav, 120);
+      if (gesture.moved && !gesture.dragging) snapBottomNav(gesture.velocityX);
       bottomNavGesture = null;
       updateBottomNavIndicators();
     };
@@ -1042,11 +1070,29 @@
   async function closeKnowledgeDocument(){if(state.knowledgeEditing)await saveKnowledge();$('#knowledgeDocument').classList.add('hidden');$('#knowledgeTree').classList.remove('hidden');state.knowledgeDocument=null;state.knowledgeEditing=false;}
   $('#knowledgeTree').addEventListener('click',async e=>{const addS=e.target.closest('[data-knowledge-add-section]'),addD=e.target.closest('[data-knowledge-add-doc]'),row=e.target.closest('[data-knowledge-id]');try{if(addS){await createKnowledge('section',addS.dataset.knowledgeAddSection||null);return;}if(addD){await createKnowledge('document',addD.dataset.knowledgeAddDoc||null);return;}if(!row)return;const n=knowledgeNode(row.dataset.knowledgeId);if(e.target.closest('.knowledge-toggle')||n.kind==='section'&&e.target.closest('.knowledge-node-title')){state.knowledgeExpanded.has(n.id)?state.knowledgeExpanded.delete(n.id):state.knowledgeExpanded.add(n.id);renderKnowledgeTree();}else if(n.kind==='document'){showKnowledgeDocument(await api(`/api/knowledge/documents/${n.id}`));}}catch(err){showToast(err.message);}});
   $('#knowledgeTree').addEventListener('contextmenu',e=>{const row=e.target.closest('[data-knowledge-id]');if(row){e.preventDefault();if(e.pointerType!=='touch')knowledgeContext(row.dataset.knowledgeId,e.clientX,e.clientY);}});
-  async function dropKnowledge(id,targetRow,root,clientY){if(!id)return;let parentId=null,order=state.knowledge.length;if(targetRow){const target=knowledgeNode(targetRow.dataset.knowledgeId);if(!target||target.id===id)return;if(target.kind==='section'){parentId=target.id;order=(target.children||[]).length;}else{parentId=target.parentId;const rect=targetRow.getBoundingClientRect();order=target.order+(clientY>rect.top+rect.height/2?1:0);}}else if(!root)return;try{await moveKnowledge(id,parentId,order);}catch(err){showToast(err.message);}}
+  function knowledgeDropPlacement(target,clientY){
+    if(!target)return null;
+    if(target.hasAttribute('data-knowledge-root'))return 'root';
+    const node=knowledgeNode(target.dataset.knowledgeId);if(!node)return null;
+    const rect=target.getBoundingClientRect(),edge=Math.min(10,rect.height*.28);
+    if(clientY<=rect.top+edge)return 'before';
+    if(clientY>=rect.bottom-edge)return 'after';
+    return node.kind==='section'?'inside':(clientY<rect.top+rect.height/2?'before':'after');
+  }
+  async function dropKnowledge(id,targetRow,root,placement){
+    if(!id)return;const source=knowledgeNode(id);if(!source)return;
+    let parentId=null,order=state.knowledge.length;
+    if(targetRow){
+      const target=knowledgeNode(targetRow.dataset.knowledgeId);if(!target||target.id===source.id||!placement)return;
+      if(placement==='inside'&&target.kind==='section'){parentId=target.id;order=(target.children||[]).length;}
+      else{parentId=target.parentId;order=target.order+(placement==='after'?1:0);if(source.parentId===parentId&&source.order<target.order)order--;}
+    }else if(!root)return;
+    try{await moveKnowledge(id,parentId,order);}catch(err){showToast(err.message);}
+  }
   const KNOWLEDGE_DRAG_START_TOLERANCE = 20;
   let knowledgePress=null, suppressKnowledgeClickPoint=null;
   function updateKnowledgeGhost(press,x,y){press.ghost.style.left=`${x-press.offsetX}px`;press.ghost.style.top=`${y-press.offsetY}px`;}
-  function clearKnowledgeDrag(press){press.row.classList.remove('dragging');press.ghost?.remove();press.dropTarget?.classList.remove('knowledge-drop-target');}
+  function clearKnowledgeDrag(press){press.row.classList.remove('dragging');press.ghost?.remove();press.dropTarget?.classList.remove('knowledge-drop-target','knowledge-drop-before','knowledge-drop-after');}
   $('#knowledgeTree').addEventListener('pointerdown',e=>{
     const row=e.target.closest('[data-knowledge-id]');
     if(knowledgePress||!row||e.button!==0||e.target.closest('[data-knowledge-add-section],[data-knowledge-add-doc]'))return;
@@ -1078,7 +1124,14 @@
     const point=document.elementFromPoint(e.clientX,e.clientY);
     const target=point?.closest('[data-knowledge-id],[data-knowledge-root]');
     const next=target?.dataset.knowledgeId===press.id?null:target;
-    if(next!==press.dropTarget){press.dropTarget?.classList.remove('knowledge-drop-target');press.dropTarget=next;next?.classList.add('knowledge-drop-target');}
+    const placement=next?knowledgeDropPlacement(next,e.clientY):null;
+    if(next!==press.dropTarget||placement!==press.dropPlacement){
+      press.dropTarget?.classList.remove('knowledge-drop-target','knowledge-drop-before','knowledge-drop-after');
+      press.dropTarget=next;press.dropPlacement=placement;
+      if(placement==='inside'||placement==='root')next?.classList.add('knowledge-drop-target');
+      if(placement==='before')next?.classList.add('knowledge-drop-before');
+      if(placement==='after')next?.classList.add('knowledge-drop-after');
+    }
   },true);
   document.addEventListener('pointerup',e=>{
     const press=knowledgePress;if(!press||press.pointerId!==e.pointerId)return;
@@ -1087,7 +1140,10 @@
     const point=document.elementFromPoint(e.clientX,e.clientY);
     clearKnowledgeDrag(press);
     suppressKnowledgeClickPoint={x:e.clientX,y:e.clientY,until:Date.now()+700};
-    dropKnowledge(press.id,point?.closest('[data-knowledge-id]'),point?.closest('[data-knowledge-root]'),e.clientY);
+    const target=point?.closest('[data-knowledge-id],[data-knowledge-root]');
+    const row=target?.matches('[data-knowledge-id]')?target:null;
+    const root=target?.matches('[data-knowledge-root]')?target:null;
+    dropKnowledge(press.id,row,root,knowledgeDropPlacement(target,e.clientY));
   },true);
   document.addEventListener('pointercancel',e=>{const press=knowledgePress;if(!press||press.pointerId!==e.pointerId)return;clearTimeout(press.timer);clearKnowledgeDrag(press);if(press.menuOpen)closeKnowledgeContext();knowledgePress=null;},true);
   document.addEventListener('selectstart',e=>{if(e.target.closest('#knowledgeTree'))e.preventDefault();},true);
