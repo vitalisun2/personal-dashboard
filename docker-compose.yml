@@ -26,6 +26,21 @@ services:
     secrets:
       - agent-memory-api-key
 
+  knowledge-api:
+    build:
+      context: .
+      dockerfile: KnowledgeBase.Api/Dockerfile
+    container_name: personal-dashboard-knowledge
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      TASKS_FILE: /data/tasks.json
+      KNOWLEDGE_FILE: /data/knowledge.json
+      KNOWLEDGE_ALLOWED_ORIGINS: ${KNOWLEDGE_ALLOWED_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+    volumes:
+      - ${DASHBOARD_DATA_DIR:-C:/Main/crystal_wave/Data/personal-dashboard}:/data
+
 secrets:
   agent-memory-api-key:
     file: ${CRYSTAL_WAVE_SECRETS_DIR:-C:/Main/crystal_wave/Secrets}/agent-memory-api-key

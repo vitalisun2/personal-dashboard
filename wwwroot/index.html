@@ -14,6 +14,7 @@
       <div class="brand">MY DASH</div>
       <button class="nav-item active" data-main="tasks" type="button"><span>✓</span> Задачи</button>
       <button class="nav-item" data-main="memory" type="button"><span>◇</span> Память агентов</button>
+      <button class="nav-item" data-main="knowledge" type="button"><span>▱</span> База знаний</button>
     </aside>
 
     <main class="content">
@@ -200,11 +201,17 @@
                   </div>
                 </section>
               </section>
+      <section id="knowledgeSection" class="hidden">
+        <header class="memory-head knowledge-head"><div><div class="eyebrow">БАЗА ЗНАНИЙ</div><h1>База знаний</h1></div><div class="knowledge-actions"><button id="knowledgeCollapseAll" class="icon-button" type="button">Свернуть всё</button><button id="knowledgeExpandAll" class="icon-button" type="button">Развернуть всё</button></div></header>
+        <div class="knowledge-layout"><section id="knowledgeTree" class="knowledge-tree" aria-label="Дерево базы знаний"></section><section id="knowledgeDocument" class="knowledge-document hidden"><button id="knowledgeBack" class="back-button" type="button">← К дереву</button><div class="knowledge-document-head"><h2 id="knowledgeDocumentTitle" class="knowledge-title"></h2><div class="knowledge-mode"><button id="knowledgeViewMode" type="button" class="active">Просмотр</button><button id="knowledgeEditMode" type="button">Редактирование</button></div></div><article id="knowledgePreview" class="knowledge-preview"></article><textarea id="knowledgeEditor" class="knowledge-editor hidden" spellcheck="false"></textarea><div id="knowledgeEditorActions" class="knowledge-editor-actions hidden"><button id="knowledgeSave" class="primary" type="button">Сохранить</button></div></section></div>
+      </section>
+
             </main>
 
     <nav class="bottom-nav" aria-label="Главная навигация">
       <button class="bottom-item active" data-main="tasks" type="button"><span>✓</span><small>Задачи</small></button>
       <button class="bottom-item" data-main="memory" type="button"><span>◇</span><small>Память</small></button>
+      <button class="bottom-item" data-main="knowledge" type="button"><span>▱</span><small>База знаний</small></button>
     </nav>
   </div>
 

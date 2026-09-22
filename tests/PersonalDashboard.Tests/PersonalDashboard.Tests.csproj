@@ -17,6 +17,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\..\PersonalDashboard.csproj" />
+      <ProjectReference Include="..\..\KnowledgeBase.Api\KnowledgeBase.Api.csproj" />
     </ItemGroup>
 
   </Project>

@@ -22,6 +22,7 @@
 - Фильтры: Все / Новые / В работе / Завершены.
 - Адаптивная верстка: sidebar на desktop, bottom navigation на mobile.
 - Все изменения сохраняются в одном внешнем `tasks.json`; Docker-клон не владеет данными.
+- «База знаний» работает отдельным `KnowledgeBase.Api` на порту `8081`, а её дерево и Markdown-документы сохраняются во внешнем `knowledge.json` рядом с `tasks.json`.
 
 ## Запуск
 
@@ -45,6 +46,7 @@ docker compose up -d --build
 - Если production-файл задач пропал, приложение восстанавливает `tasks.json.bak`; если нет и его, оно явно сообщает об ошибке вместо запуска с пустым списком.
 - Контейнер видит Ollama хоста через `host.docker.internal:11434` (добавлен `host-gateway`).
 - Общая память агентов берёт ключ из `C:\Main\crystal_wave\Secrets\agent-memory-api-key`. Docker передаёт его в контейнер только для чтения как `/run/secrets/agent-memory-api-key`. На другой машине путь задаётся через `CRYSTAL_WAVE_SECRETS_DIR`.
+- Для базы знаний можно задать `KNOWLEDGE_FILE` и `KNOWLEDGE_ALLOWED_ORIGINS`; по умолчанию API использует соседний с `TASKS_FILE` файл, создаёт `.bak` и дневные снимки в `archive/ГГГГ-ММ-ДД/knowledge.json` с хранением 30 дней.
 - Для доступа из любой точки: `tailscale serve --bg 8080` (или просто открыть порт в тайлнете) — приложение доступно только устройствам твоей Tailscale-сети, не публичному интернету.
 
 ## Структура
@@ -54,6 +56,7 @@ docker compose up -d --build
 - `wwwroot/index.html` — интерфейс.
 - `wwwroot/styles.css` — адаптивные стили.
 - `wwwroot/app.js` — UI-логика и работа с API.
+- `KnowledgeBase.Api/` — отдельный Web API дерева базы знаний (разделы и Markdown-документы); фронтенд использует `window.KNOWLEDGE_API_BASE_URL` или `http(s)://<host>:8081`.
 - `tests/` — интеграционные тесты (xunit).
 
 ## Агент для title/description/section

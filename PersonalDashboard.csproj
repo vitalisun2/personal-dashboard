@@ -7,6 +7,7 @@
   <ItemGroup>
       <InternalsVisibleTo Include="PersonalDashboard.Tests" />
       <Compile Remove="tests/**" />
+      <Compile Remove="KnowledgeBase.Api/**" />
       <Content Remove="tests/**" />
       <EmbeddedResource Remove="tests/**" />
       <None Remove="tests/**" />

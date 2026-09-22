@@ -3,7 +3,7 @@
     main: 'tasks', tasks: [], taskTab: 'backlog', taskFilter: 'all', selectedTaskId: null, renamingSection: null,
     expanded: { backlog: new Set(), today: new Set() },
     dashboard: null, memoryStatus: null, memoryTab: 'overview', secondary: 'agents', selectedLesson: null, selectedProblem: null, selectedSkill: null, problems: [], skills: [],
-    lessonSort: 'added', recentTab: 'reads'
+    lessonSort: 'added', recentTab: 'reads', knowledge: [], knowledgeExpanded: new Set(), knowledgeDocument: null, knowledgeEditing: false
   };
 
   const $ = s => document.querySelector(s);
@@ -17,7 +17,9 @@
   }
 
   async function api(url, options = {}) {
-    const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+    const base = window.KNOWLEDGE_API_BASE_URL || `${location.protocol}//${location.hostname}:8081`;
+    const target = url.startsWith('/api/knowledge') ? `${base}${url}` : url;
+    const response = await fetch(target, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
     if (!response.ok) { let m='Ошибка запроса.'; try { m=(await response.json()).message||m; } catch {} throw new Error(m); }
     return response.status === 204 ? null : response.json();
   }
@@ -134,6 +136,7 @@
       const memoryTab = memoryTabs.has(parts[1]) ? parts[1] : 'overview';
       return { main: 'memory', memoryTab, lessonId: params.get('lesson'), problemId: params.get('problem'), skillId: params.get('skill') };
     }
+    if (parts[0] === 'knowledge') return { main: 'knowledge' };
 
     if (parts[0] === 'tasks' && parts[1] === 'chat') return { main: 'tasks', chat: true, sessionId: params.get('session') };
 
@@ -153,6 +156,7 @@
       return `#/memory/${route.memoryTab || 'overview'}${params.size ? `?${params}` : ''}`;
     }
     if (route.chat) return `#/tasks/chat${route.sessionId ? `?session=${encodeURIComponent(route.sessionId)}` : ''}`;
+    if (route.main === 'knowledge') return '#/knowledge';
     if (route.filter && route.filter !== 'all') params.set('filter', route.filter);
     if (route.taskId) params.set('task', route.taskId);
     return `#/tasks/${route.taskTab || 'backlog'}${params.size ? `?${params}` : ''}`;
@@ -173,6 +177,7 @@
   }
 
   function applyRoute(route) {
+    if (route.main === 'knowledge') { setMain('knowledge'); closeKnowledgeDocument(); return; }
     if (route.main === 'memory') {
       setMain('memory');
       setMemoryTab(route.memoryTab);
@@ -231,8 +236,24 @@
     state.main = value;
     $('#tasksSection').classList.toggle('hidden', value !== 'tasks');
     $('#memorySection').classList.toggle('hidden', value !== 'memory');
+    $('#knowledgeSection').classList.toggle('hidden', value !== 'knowledge');
     $$('[data-main]').forEach(b => b.classList.toggle('active', b.dataset.main === value));
   }
+
+  // -------- База знаний --------
+  async function loadKnowledge(){ state.knowledge=await api('/api/knowledge/tree'); renderKnowledgeTree(); }
+  function knowledgeFlat(nodes,out=[]){nodes.forEach(n=>{out.push(n);if(n.children)knowledgeFlat(n.children,out);});return out;}
+  function renderKnowledgeTree(){const box=$('#knowledgeTree');box.replaceChildren();const render=(nodes,parent,depth=0)=>nodes.forEach(n=>{const row=document.createElement('div');row.className='knowledge-row';row.draggable=true;row.dataset.knowledgeId=n.id;row.dataset.knowledgeParent=parent||'';row.style.setProperty('--knowledge-depth',depth);const toggle=document.createElement('button');toggle.className='knowledge-toggle';toggle.type='button';toggle.textContent=n.kind==='section'?(state.knowledgeExpanded.has(n.id)?'⌄':'›'):'·';toggle.disabled=n.kind!=='section';row.append(toggle);const title=document.createElement('button');title.type='button';title.className='knowledge-node-title '+n.kind;title.textContent=n.title;row.append(title);if(n.kind==='section'){const actions=document.createElement('span');actions.className='knowledge-inline-actions';const addDoc=document.createElement('button');addDoc.type='button';addDoc.textContent='+ MD';addDoc.dataset.knowledgeAddDoc=n.id;const addSection=document.createElement('button');addSection.type='button';addSection.textContent='+ раздел';addSection.dataset.knowledgeAddSection=n.id;actions.append(addDoc,addSection);row.append(actions);}box.append(row);if(n.kind==='section'&&state.knowledgeExpanded.has(n.id))render(n.children||[],n.id,depth+1);});render(state.knowledge,null);const root=document.createElement('div');root.className='knowledge-root-drop';root.dataset.knowledgeRoot='';root.textContent='Перетащите сюда, чтобы вернуть в корень';box.append(root);const add=document.createElement('div');add.className='knowledge-create-actions';add.innerHTML='<button type="button" data-knowledge-add-section="">+ Раздел</button><button type="button" data-knowledge-add-doc="">+ Документ MD</button>';box.append(add);}
+  function knowledgeNode(id){return knowledgeFlat(state.knowledge).find(n=>String(n.id)===String(id));}
+  async function createKnowledge(kind,parentId){const title=prompt(kind==='section'?'Название раздела':'Название документа');if(!title?.trim())return;const body=kind==='document'?prompt('Содержимое Markdown','')??'':null;await api(`/api/knowledge/${kind==='section'?'sections':'documents'}`,{method:'POST',body:JSON.stringify({title,content:body,parentId:parentId||null})});if(parentId)state.knowledgeExpanded.add(parentId);await loadKnowledge();showToast(kind==='section'?'Раздел создан':'Документ создан');}
+  function showKnowledgeDocument(doc){state.knowledgeDocument=doc;state.knowledgeEditing=false;$('#knowledgeTree').classList.add('hidden');$('#knowledgeDocument').classList.remove('hidden');$('#knowledgeDocumentTitle').textContent=doc.title;$('#knowledgeEditor').value=doc.content||'';renderKnowledgeMode();}
+  function renderKnowledgeMode(){const edit=state.knowledgeEditing;$('#knowledgeViewMode').classList.toggle('active',!edit);$('#knowledgeEditMode').classList.toggle('active',edit);$('#knowledgePreview').classList.toggle('hidden',edit);$('#knowledgeEditor').classList.toggle('hidden',!edit);$('#knowledgeEditorActions').classList.toggle('hidden',!edit);if(!edit)$('#knowledgePreview').innerHTML=renderMarkdown(state.knowledgeDocument?.content||'');}
+  function renderMarkdown(value){const lines=escapeHtml(value).split('\n'),out=[];let code=false,buf=[],list=null;const closeList=()=>{if(list){out.push(`</${list}>`);list=null;}};for(const line of lines){if(line.startsWith('```')){closeList();if(code){out.push(`<pre><code>${buf.join('\n')}</code></pre>`);buf=[];}code=!code;continue;}if(code){buf.push(line);continue;}const unordered=/^[-*] /.test(line),ordered=/^\d+\. /.test(line),kind=unordered?'ul':ordered?'ol':null;if(kind){if(list!==kind){closeList();out.push(`<${kind}>`);list=kind;}out.push(`<li>${inlineMd(line.replace(unordered?/^[-*] /:/^\d+\. /,''))}</li>`);continue;}closeList();if(/^### /.test(line))out.push(`<h3>${inlineMd(line.slice(4))}</h3>`);else if(/^## /.test(line))out.push(`<h2>${inlineMd(line.slice(3))}</h2>`);else if(/^# /.test(line))out.push(`<h1>${inlineMd(line.slice(2))}</h1>`);else if(line.trim())out.push(`<p>${inlineMd(line)}</p>`);}closeList();return out.join('');}
+  function inlineMd(s){return s.replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\*([^*]+)\*/g,'<em>$1</em>').replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');}
+  async function saveKnowledge(){const d=state.knowledgeDocument;if(!d)return;await api(`/api/knowledge/documents/${d.id}/content`,{method:'PUT',body:JSON.stringify({content:$('#knowledgeEditor').value})});d.content=$('#knowledgeEditor').value;state.knowledgeEditing=false;renderKnowledgeMode();showToast('Документ сохранён');}
+  async function moveKnowledge(id,parentId,order){await api(`/api/knowledge/nodes/${id}/position`,{method:'PUT',body:JSON.stringify({parentId:parentId||null,order})});await loadKnowledge();}
+  function closeKnowledgeContext(){document.querySelector('.knowledge-context-menu')?.remove();}
+  function knowledgeContext(id,x,y){const n=knowledgeNode(id);if(!n)return;closeKnowledgeContext();const menu=document.createElement('div');menu.className='knowledge-context-menu';menu.setAttribute('role','menu');const rename=document.createElement('button');rename.type='button';rename.textContent='Переименовать';rename.addEventListener('click',async()=>{closeKnowledgeContext();const title=prompt('Новое название',n.title);if(!title?.trim())return;try{await api(`/api/knowledge/nodes/${id}/name`,{method:'PATCH',body:JSON.stringify({title})});await loadKnowledge();}catch(e){showToast(e.message);}});const remove=document.createElement('button');remove.type='button';remove.textContent='Удалить';remove.addEventListener('click',async()=>{closeKnowledgeContext();if(!confirm(`Удалить «${n.title}» вместе с содержимым?`))return;try{await api(`/api/knowledge/nodes/${id}`,{method:'DELETE'});await loadKnowledge();}catch(e){showToast(e.message);}});menu.append(rename,remove);document.body.append(menu);positionContextMenu(menu,x,y);}
 
   // -------- Tasks --------
   async function loadTasks() {
@@ -816,8 +837,28 @@
   $$('[data-main]').forEach(b=>b.addEventListener('click',()=>{
     navigate(b.dataset.main==='memory'
       ? {main:'memory',memoryTab:state.memoryTab}
+      : b.dataset.main==='knowledge' ? {main:'knowledge'}
       : {main:'tasks',taskTab:state.taskTab,filter:state.taskFilter});
   }));
+  $('#knowledgeCollapseAll').addEventListener('click',()=>{state.knowledgeExpanded.clear();renderKnowledgeTree();});
+  $('#knowledgeExpandAll').addEventListener('click',()=>{knowledgeFlat(state.knowledge).filter(n=>n.kind==='section').forEach(n=>state.knowledgeExpanded.add(n.id));renderKnowledgeTree();});
+  $('#knowledgeBack').addEventListener('click',closeKnowledgeDocument);
+  $('#knowledgeViewMode').addEventListener('click',()=>{state.knowledgeEditing=false;renderKnowledgeMode();});
+  $('#knowledgeEditMode').addEventListener('click',()=>{state.knowledgeEditing=true;renderKnowledgeMode();$('#knowledgeEditor').focus();});
+  $('#knowledgeSave').addEventListener('click',()=>saveKnowledge().catch(e=>showToast(e.message)));
+  function closeKnowledgeDocument(){$('#knowledgeDocument').classList.add('hidden');$('#knowledgeTree').classList.remove('hidden');state.knowledgeDocument=null;}
+  $('#knowledgeTree').addEventListener('click',async e=>{const addS=e.target.closest('[data-knowledge-add-section]'),addD=e.target.closest('[data-knowledge-add-doc]'),row=e.target.closest('[data-knowledge-id]');try{if(addS){await createKnowledge('section',addS.dataset.knowledgeAddSection||null);return;}if(addD){await createKnowledge('document',addD.dataset.knowledgeAddDoc||null);return;}if(!row)return;const n=knowledgeNode(row.dataset.knowledgeId);if(e.target.closest('.knowledge-toggle')||n.kind==='section'&&e.target.closest('.knowledge-node-title')){state.knowledgeExpanded.has(n.id)?state.knowledgeExpanded.delete(n.id):state.knowledgeExpanded.add(n.id);renderKnowledgeTree();}else if(n.kind==='document'){showKnowledgeDocument(await api(`/api/knowledge/documents/${n.id}`));}}catch(err){showToast(err.message);}});
+  $('#knowledgeTree').addEventListener('contextmenu',e=>{const row=e.target.closest('[data-knowledge-id]');if(row){e.preventDefault();knowledgeContext(row.dataset.knowledgeId,e.clientX,e.clientY);}});
+  $('#knowledgeTree').addEventListener('dragstart',e=>{const row=e.target.closest('[data-knowledge-id]');if(row)e.dataTransfer.setData('text/plain',row.dataset.knowledgeId);});
+  $('#knowledgeTree').addEventListener('dragover',e=>e.preventDefault());
+  async function dropKnowledge(id,targetRow,root,clientY){if(!id)return;let parentId=null,order=state.knowledge.length;if(targetRow){const target=knowledgeNode(targetRow.dataset.knowledgeId);if(!target||target.id===id)return;if(target.kind==='section'){parentId=target.id;order=(target.children||[]).length;}else{parentId=target.parentId;const rect=targetRow.getBoundingClientRect();order=target.order+(clientY>rect.top+rect.height/2?1:0);}}else if(!root)return;try{await moveKnowledge(id,parentId,order);}catch(err){showToast(err.message);}}
+  $('#knowledgeTree').addEventListener('drop',async e=>{e.preventDefault();await dropKnowledge(e.dataTransfer.getData('text/plain'),e.target.closest('[data-knowledge-id]'),e.target.closest('[data-knowledge-root]'),e.clientY);});
+  let knowledgePress=null, suppressKnowledgeClick=false;
+  $('#knowledgeTree').addEventListener('pointerdown',e=>{const row=e.target.closest('[data-knowledge-id]');if(!row||e.button!==0||e.target.closest('[data-knowledge-add-section],[data-knowledge-add-doc]'))return;closeKnowledgeContext();const press={id:row.dataset.knowledgeId,row,x:e.clientX,y:e.clientY,pointerId:e.pointerId,moved:false,timer:null};press.timer=setTimeout(()=>{if(knowledgePress!==press||press.moved)return;suppressKnowledgeClick=true;knowledgePress=null;knowledgeContext(press.id,press.x,press.y);},LONG_PRESS_MS);knowledgePress=press;});
+  document.addEventListener('pointermove',e=>{const press=knowledgePress;if(!press||press.pointerId!==e.pointerId)return;if(Math.hypot(e.clientX-press.x,e.clientY-press.y)<=LONG_PRESS_TOLERANCE)return;clearTimeout(press.timer);press.moved=true;press.row.classList.add('dragging');},true);
+  document.addEventListener('pointerup',async e=>{const press=knowledgePress;if(!press||press.pointerId!==e.pointerId)return;knowledgePress=null;clearTimeout(press.timer);if(!press.moved)return;press.row.classList.remove('dragging');const point=document.elementFromPoint(e.clientX,e.clientY);await dropKnowledge(press.id,point?.closest('[data-knowledge-id]'),point?.closest('[data-knowledge-root]'),e.clientY);},true);
+  document.addEventListener('pointercancel',e=>{if(knowledgePress?.pointerId===e.pointerId){clearTimeout(knowledgePress.timer);knowledgePress.row.classList.remove('dragging');knowledgePress=null;}},true);
+  document.addEventListener('click',e=>{if(suppressKnowledgeClick){suppressKnowledgeClick=false;e.preventDefault();e.stopImmediatePropagation();return;}if(!e.target.closest('.knowledge-context-menu'))closeKnowledgeContext();},true);
   $('#backlogTab').addEventListener('click',()=>navigate({main:'tasks',taskTab:'backlog',filter:'all'}));
   $('#todayTab').addEventListener('click',()=>navigate({main:'tasks',taskTab:'today',filter:'all'}));
   $$('.filter').forEach(b=>b.addEventListener('click',()=>navigate({main:'tasks',taskTab:'today',filter:b.dataset.filter})));
@@ -869,6 +910,6 @@
   window.addEventListener('popstate', applyCurrentRoute);
   window.addEventListener('hashchange', applyCurrentRoute);
 
-  async function init(){try{await Promise.all([loadTasks(),loadMemory()]);setSecondary('agents');applyCurrentRoute();}catch(err){showToast(err.message);}}
+  async function init(){try{await Promise.all([loadTasks(),loadMemory(),loadKnowledge()]);setSecondary('agents');applyCurrentRoute();}catch(err){showToast(err.message);}}
   init();
 })();
