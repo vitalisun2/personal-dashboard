@@ -36,13 +36,26 @@ public sealed class KnowledgeService(IKnowledgeStore store)
     public async Task<(KnowledgeNode? Node, string? Error)> CreateAsync(string kind, string? title, string? content, Guid? parentId, CancellationToken ct)
     {
         var cleanTitle = title?.Trim();
-        if (string.IsNullOrWhiteSpace(cleanTitle)) return (null, "Название обязательно.");
+        if (kind != "document" && string.IsNullOrWhiteSpace(cleanTitle)) return (null, "Название обязательно.");
         await mutationGate.WaitAsync(ct);
         try {
             var data = await store.ReadAsync(ct);
             if (!ValidParent(data.Nodes, parentId)) return (null, "Родительский раздел не найден.");
+            if (kind == "document" && string.IsNullOrWhiteSpace(cleanTitle))
+            {
+                var number = Math.Max(1, data.NextDocumentNumber);
+                foreach (var existing in data.Nodes)
+                    if (existing.Title.StartsWith("Doc ", StringComparison.OrdinalIgnoreCase)
+                        && int.TryParse(existing.Title.AsSpan(4), out var existingNumber)
+                        && existingNumber >= number)
+                        number = existingNumber + 1;
+                var titles = data.Nodes.Select(node => node.Title).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                while (titles.Contains($"Doc {number}")) number++;
+                cleanTitle = $"Doc {number}";
+                data.NextDocumentNumber = number + 1;
+            }
             var now = DateTimeOffset.UtcNow;
-            var node = new KnowledgeNode { Kind = kind, Title = cleanTitle, Content = kind == "document" ? content ?? "" : null, ParentId = parentId, Order = NextOrder(data.Nodes, parentId), CreatedAt = now, UpdatedAt = now };
+            var node = new KnowledgeNode { Kind = kind, Title = cleanTitle!, Content = kind == "document" ? content ?? "" : null, ParentId = parentId, Order = NextOrder(data.Nodes, parentId), CreatedAt = now, UpdatedAt = now };
             data.Nodes.Add(node); Normalize(data.Nodes); await store.WriteAsync(data, ct); return (node, null);
         } finally { mutationGate.Release(); }
     }

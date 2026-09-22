@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light dark">
   <meta http-equiv="Cache-Control" content="no-cache, no-store">
   <title>My Dashboard</title>
-  <link rel="stylesheet" href="styles.css?v=15">
+  <link rel="stylesheet" href="styles.css?v=16">
 </head>
 <body>
   <div class="app-shell">
@@ -202,8 +202,8 @@
                 </section>
               </section>
       <section id="knowledgeSection" class="hidden">
-        <header class="memory-head knowledge-head"><div><div class="eyebrow">БАЗА ЗНАНИЙ</div><h1>База знаний</h1></div><div class="knowledge-actions"><button id="knowledgeCollapseAll" class="icon-button" type="button">Свернуть всё</button><button id="knowledgeExpandAll" class="icon-button" type="button">Развернуть всё</button></div></header>
-        <div class="knowledge-layout"><section id="knowledgeTree" class="knowledge-tree" aria-label="Дерево базы знаний"></section><section id="knowledgeDocument" class="knowledge-document hidden"><button id="knowledgeBack" class="back-button" type="button">← К дереву</button><div class="knowledge-document-head"><h2 id="knowledgeDocumentTitle" class="knowledge-title"></h2><div class="knowledge-mode"><button id="knowledgeModeToggle" type="button">Редактирование</button></div></div><article id="knowledgePreview" class="knowledge-preview"></article><textarea id="knowledgeEditor" class="knowledge-editor hidden" spellcheck="false"></textarea><div id="knowledgeEditorActions" class="knowledge-editor-actions hidden"><button id="knowledgeSave" class="primary" type="button">Сохранить</button></div></section></div>
+        <header class="memory-head knowledge-head"><div><div class="eyebrow">БАЗА ЗНАНИЙ</div><h1>База знаний</h1></div><div class="knowledge-actions"><button id="knowledgeCollapseAll" class="icon-button" type="button" aria-label="Свернуть всё"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6 10 2 16 6 M4 14 10 18 16 14"/></svg><span class="knowledge-control-label">Свернуть всё</span></button><button id="knowledgeExpandAll" class="icon-button" type="button" aria-label="Развернуть всё"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 2 10 6 16 2 M4 18 10 14 16 18"/></svg><span class="knowledge-control-label">Развернуть всё</span></button></div></header>
+        <div class="knowledge-layout"><section id="knowledgeTree" class="knowledge-tree" aria-label="Дерево базы знаний"></section><section id="knowledgeDocument" class="knowledge-document hidden"><button id="knowledgeBack" class="back-button" type="button">← К дереву</button><div class="knowledge-document-head"><h2 id="knowledgeDocumentTitle" class="knowledge-title"></h2><div class="knowledge-mode"><button id="knowledgeModeToggle" type="button">Редактирование</button></div></div><article id="knowledgePreview" class="knowledge-preview"></article><textarea id="knowledgeEditor" class="knowledge-editor hidden" spellcheck="false"></textarea></section></div>
       </section>
 
             </main>
@@ -214,6 +214,28 @@
       <button class="bottom-item" data-main="knowledge" type="button"><span>▱</span><small>База знаний</small></button>
     </nav>
   </div>
+
+  <dialog id="knowledgeNameModal" class="modal" aria-labelledby="knowledgeNameTitle">
+    <form id="knowledgeNameForm" class="modal-form">
+      <div id="knowledgeNameTitle" class="modal-title"></div>
+      <label class="modal-label" for="knowledgeNameInput">Название</label>
+      <input id="knowledgeNameInput" type="text" maxlength="120" autocomplete="off" required>
+      <div class="modal-actions">
+        <button id="knowledgeNameCancel" class="modal-cancel" type="button">Отмена</button>
+        <button id="knowledgeNameSubmit" class="primary" type="submit">Создать</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="knowledgeDeleteModal" class="modal" aria-labelledby="knowledgeDeleteTitle">
+    <div class="modal-form">
+      <div id="knowledgeDeleteTitle" class="modal-title">Удалить узел?</div>
+      <p id="knowledgeDeleteMessage" class="knowledge-delete-message"></p>
+      <div class="modal-actions">
+        <button id="knowledgeDeleteCancel" class="modal-cancel" type="button">Отмена</button>
+        <button id="knowledgeDeleteConfirm" class="knowledge-delete-confirm" type="button">Удалить</button>
+      </div>
+    </div>
+  </dialog>
 
   <dialog id="renameSectionModal" class="modal" aria-labelledby="renameSectionTitle">
     <form id="renameSectionForm" class="modal-form">
@@ -250,6 +272,6 @@
   </dialog>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script src="app.js?v=13"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>

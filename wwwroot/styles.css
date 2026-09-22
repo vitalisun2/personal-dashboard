@@ -36,3 +36,14 @@
 @media(max-width:720px){.knowledge-document-head{display:flex;align-items:center}.knowledge-mode{margin-top:0;margin-left:auto}.knowledge-mode button{width:auto}}
 @media(max-width:720px){.content{padding-bottom:76px}.bottom-nav{grid-template-columns:1fr 2.58fr 1fr 2.58fr 1fr 2.58fr 1fr;gap:0;padding:6px 10px env(safe-area-inset-bottom,6px)}.bottom-item{aspect-ratio:1.67}.bottom-item:nth-child(1){grid-column:2}.bottom-item:nth-child(2){grid-column:4}.bottom-item:nth-child(3){grid-column:6}.toast{bottom:72px}}
 .knowledge-row{touch-action:none}
+.knowledge-context-menu{background:color-mix(in srgb,var(--card) 84%,#fff 16%);box-shadow:0 12px 28px rgba(15,23,42,.2)}
+.knowledge-preview,.knowledge-editor{background:color-mix(in srgb,var(--card) 90%,#fff 10%)}
+.knowledge-preview{min-height:55vh;border:1px solid var(--border);border-radius:10px;padding:14px}
+.knowledge-actions .icon-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:46px;padding:0 12px;font-size:13px}
+.knowledge-actions svg{width:22px;height:22px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.knowledge-row.dragging{opacity:.35}
+.knowledge-drag-ghost{position:fixed;z-index:40;pointer-events:none;opacity:.9;border-color:var(--accent);background:color-mix(in srgb,var(--card) 88%,#fff 12%);box-shadow:0 12px 28px rgba(0,0,0,.32)}
+.knowledge-drop-target{outline:2px solid var(--accent);background:var(--accent-soft)}
+.knowledge-delete-message{margin:0;font-size:13px;line-height:1.45}.knowledge-delete-confirm{border:1px solid var(--danger);border-radius:10px;background:var(--danger);color:#fff;padding:9px 14px;font-weight:700}
+#knowledgeNameModal,#knowledgeDeleteModal{background:color-mix(in srgb,var(--card) 88%,#fff 12%)}
+@media(max-width:720px){.knowledge-actions .icon-button{width:46px;height:46px;padding:0}.knowledge-control-label{display:none}.knowledge-actions .icon-button:first-child::after,.knowledge-actions .icon-button:last-child::after{content:none}}

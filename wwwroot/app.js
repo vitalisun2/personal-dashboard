@@ -175,7 +175,7 @@
   }
 
   function applyRoute(route) {
-    if (route.main === 'knowledge') { setMain('knowledge'); closeKnowledgeDocument(); return; }
+    if (route.main === 'knowledge') { setMain('knowledge'); closeKnowledgeDocument().catch(e=>showToast(e.message)); return; }
     if (route.main === 'memory') {
       setMain('memory');
       setMemoryTab(route.memoryTab);
@@ -244,15 +244,38 @@
   function knowledgeFlat(nodes,out=[]){nodes.forEach(n=>{out.push(n);if(n.children)knowledgeFlat(n.children,out);});return out;}
   function renderKnowledgeTree(){const box=$('#knowledgeTree');box.replaceChildren();const render=(nodes,parent,depth=0)=>nodes.forEach(n=>{const row=document.createElement('div');row.className='knowledge-row';row.dataset.knowledgeId=n.id;row.dataset.knowledgeParent=parent||'';row.style.setProperty('--knowledge-depth',depth);const toggle=document.createElement('button');toggle.className='knowledge-toggle';toggle.type='button';toggle.textContent=n.kind==='section'?(state.knowledgeExpanded.has(n.id)?'⌄':'›'):'·';toggle.disabled=n.kind!=='section';row.append(toggle);const title=document.createElement('button');title.type='button';title.className='knowledge-node-title '+n.kind;title.textContent=n.title;row.append(title);if(n.kind==='section'){const actions=document.createElement('span');actions.className='knowledge-inline-actions';const addDoc=document.createElement('button');addDoc.type='button';addDoc.textContent='+ MD';addDoc.dataset.knowledgeAddDoc=n.id;const addSection=document.createElement('button');addSection.type='button';addSection.textContent='+ раздел';addSection.dataset.knowledgeAddSection=n.id;actions.append(addDoc,addSection);row.append(actions);}box.append(row);if(n.kind==='section'&&state.knowledgeExpanded.has(n.id))render(n.children||[],n.id,depth+1);});render(state.knowledge,null);const root=document.createElement('div');root.className='knowledge-root-drop';root.dataset.knowledgeRoot='';root.textContent='Перетащите сюда, чтобы вернуть в корень';box.append(root);const add=document.createElement('div');add.className='knowledge-create-actions';add.innerHTML='<button type="button" data-knowledge-add-section="">+ Раздел</button><button type="button" data-knowledge-add-doc="">+ Документ MD</button>';box.append(add);}
   function knowledgeNode(id){return knowledgeFlat(state.knowledge).find(n=>String(n.id)===String(id));}
-  async function createKnowledge(kind,parentId){const title=prompt(kind==='section'?'Название раздела':'Название документа');if(!title?.trim())return;const body=kind==='document'?prompt('Содержимое Markdown','')??'':null;await api(`/api/knowledge/${kind==='section'?'sections':'documents'}`,{method:'POST',body:JSON.stringify({title,content:body,parentId:parentId||null})});if(parentId)state.knowledgeExpanded.add(parentId);await loadKnowledge();showToast(kind==='section'?'Раздел создан':'Документ создан');}
+  function requestKnowledgeName(heading,value='',action='Создать'){
+    const dialog=$('#knowledgeNameModal'),input=$('#knowledgeNameInput');
+    $('#knowledgeNameTitle').textContent=heading;$('#knowledgeNameSubmit').textContent=action;
+    input.value=value;dialog.returnValue='';dialog.showModal();input.focus();if(value)input.select();
+    return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='submit'?input.value.trim():null),{once:true});});
+  }
+  function requestKnowledgeDelete(title){
+    const dialog=$('#knowledgeDeleteModal');
+    $('#knowledgeDeleteMessage').textContent=`Удалить «${title}» вместе со всем содержимым?`;
+    dialog.returnValue='';dialog.showModal();
+    return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='delete'),{once:true});});
+  }
+  async function createKnowledge(kind,parentId){const title=kind==='section'?await requestKnowledgeName('Новый раздел'):null;if(kind==='section'&&!title)return;await api(`/api/knowledge/${kind==='section'?'sections':'documents'}`,{method:'POST',body:JSON.stringify({title,parentId:parentId||null})});if(parentId)state.knowledgeExpanded.add(parentId);await loadKnowledge();showToast(kind==='section'?'Раздел создан':'Документ создан');}
   function showKnowledgeDocument(doc){state.knowledgeDocument=doc;state.knowledgeEditing=false;$('#knowledgeTree').classList.add('hidden');$('#knowledgeDocument').classList.remove('hidden');$('#knowledgeDocumentTitle').textContent=doc.title;$('#knowledgeEditor').value=doc.content||'';renderKnowledgeMode();}
-  function renderKnowledgeMode(){const edit=state.knowledgeEditing;$('#knowledgeModeToggle').textContent=edit?'Просмотр':'Редактирование';$('#knowledgePreview').classList.toggle('hidden',edit);$('#knowledgeEditor').classList.toggle('hidden',!edit);$('#knowledgeEditorActions').classList.toggle('hidden',!edit);if(!edit)$('#knowledgePreview').innerHTML=renderMarkdown(state.knowledgeDocument?.content||'');}
+  function renderKnowledgeMode(){const edit=state.knowledgeEditing;$('#knowledgeModeToggle').textContent=edit?'Просмотр':'Редактирование';$('#knowledgePreview').classList.toggle('hidden',edit);$('#knowledgeEditor').classList.toggle('hidden',!edit);if(!edit)$('#knowledgePreview').innerHTML=renderMarkdown(state.knowledgeDocument?.content||'');}
   function renderMarkdown(value){const lines=escapeHtml(value).split('\n'),out=[];let code=false,buf=[],list=null;const closeList=()=>{if(list){out.push(`</${list}>`);list=null;}};for(const line of lines){if(line.startsWith('```')){closeList();if(code){out.push(`<pre><code>${buf.join('\n')}</code></pre>`);buf=[];}code=!code;continue;}if(code){buf.push(line);continue;}const unordered=/^[-*] /.test(line),ordered=/^\d+\. /.test(line),kind=unordered?'ul':ordered?'ol':null;if(kind){if(list!==kind){closeList();out.push(`<${kind}>`);list=kind;}out.push(`<li>${inlineMd(line.replace(unordered?/^[-*] /:/^\d+\. /,''))}</li>`);continue;}closeList();if(/^### /.test(line))out.push(`<h3>${inlineMd(line.slice(4))}</h3>`);else if(/^## /.test(line))out.push(`<h2>${inlineMd(line.slice(3))}</h2>`);else if(/^# /.test(line))out.push(`<h1>${inlineMd(line.slice(2))}</h1>`);else if(line.trim())out.push(`<p>${inlineMd(line)}</p>`);}closeList();return out.join('');}
   function inlineMd(s){return s.replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\*([^*]+)\*/g,'<em>$1</em>').replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');}
-  async function saveKnowledge(){const d=state.knowledgeDocument;if(!d)return;await api(`/api/knowledge/documents/${d.id}/content`,{method:'PUT',body:JSON.stringify({content:$('#knowledgeEditor').value})});d.content=$('#knowledgeEditor').value;state.knowledgeEditing=false;renderKnowledgeMode();showToast('Документ сохранён');}
-  async function moveKnowledge(id,parentId,order){await api(`/api/knowledge/nodes/${id}/position`,{method:'PUT',body:JSON.stringify({parentId:parentId||null,order})});await loadKnowledge();}
+  let knowledgeSaveInFlight=null;
+  async function saveKnowledge(){
+    if(knowledgeSaveInFlight)return knowledgeSaveInFlight;
+    const d=state.knowledgeDocument;if(!d)return;
+    const editor=$('#knowledgeEditor'),content=editor.value;
+    if(content===d.content)return;
+    editor.disabled=true;
+    knowledgeSaveInFlight=api(`/api/knowledge/documents/${d.id}/content`,{method:'PUT',body:JSON.stringify({content})})
+      .then(()=>{d.content=content;})
+      .finally(()=>{editor.disabled=false;knowledgeSaveInFlight=null;});
+    return knowledgeSaveInFlight;
+  }
+  async function moveKnowledge(id,parentId,order){await api(`/api/knowledge/nodes/${id}/position`,{method:'PUT',body:JSON.stringify({parentId:parentId||null,order})});if(parentId)state.knowledgeExpanded.add(parentId);await loadKnowledge();}
   function closeKnowledgeContext(){document.querySelector('.knowledge-context-menu')?.remove();}
-  function knowledgeContext(id,x,y){const n=knowledgeNode(id);if(!n)return;closeKnowledgeContext();const menu=document.createElement('div');menu.className='knowledge-context-menu';menu.setAttribute('role','menu');const rename=document.createElement('button');rename.type='button';rename.textContent='Переименовать';rename.addEventListener('click',async()=>{closeKnowledgeContext();const title=prompt('Новое название',n.title);if(!title?.trim())return;try{await api(`/api/knowledge/nodes/${id}/name`,{method:'PATCH',body:JSON.stringify({title})});await loadKnowledge();}catch(e){showToast(e.message);}});const remove=document.createElement('button');remove.type='button';remove.textContent='Удалить';remove.addEventListener('click',async()=>{closeKnowledgeContext();if(!confirm(`Удалить «${n.title}» вместе с содержимым?`))return;try{await api(`/api/knowledge/nodes/${id}`,{method:'DELETE'});await loadKnowledge();}catch(e){showToast(e.message);}});menu.append(rename,remove);document.body.append(menu);positionContextMenu(menu,x,y);}
+  function knowledgeContext(id,x,y){const n=knowledgeNode(id);if(!n)return;closeKnowledgeContext();const menu=document.createElement('div');menu.className='knowledge-context-menu';menu.setAttribute('role','menu');const rename=document.createElement('button');rename.type='button';rename.textContent='Переименовать';rename.addEventListener('click',async()=>{closeKnowledgeContext();const title=await requestKnowledgeName('Переименовать',n.title,'Сохранить');if(!title)return;try{await api(`/api/knowledge/nodes/${id}/name`,{method:'PATCH',body:JSON.stringify({title})});await loadKnowledge();}catch(e){showToast(e.message);}});const remove=document.createElement('button');remove.type='button';remove.textContent='Удалить';remove.addEventListener('click',async()=>{closeKnowledgeContext();if(!await requestKnowledgeDelete(n.title))return;try{await api(`/api/knowledge/nodes/${id}`,{method:'DELETE'});await loadKnowledge();}catch(e){showToast(e.message);}});menu.append(rename,remove);document.body.append(menu);positionContextMenu(menu,x,y);}
 
   // -------- Tasks --------
   async function loadTasks() {
@@ -834,7 +857,12 @@
   })();
 
   // -------- Events --------
-  $$('[data-main]').forEach(b=>b.addEventListener('click',()=>{
+  $('#knowledgeNameForm').addEventListener('submit',e=>{e.preventDefault();const input=$('#knowledgeNameInput');if(!input.value.trim()){input.value='';input.reportValidity();return;}$('#knowledgeNameModal').close('submit');});
+  $('#knowledgeNameCancel').addEventListener('click',()=>$('#knowledgeNameModal').close('cancel'));
+  $('#knowledgeDeleteCancel').addEventListener('click',()=>$('#knowledgeDeleteModal').close('cancel'));
+  $('#knowledgeDeleteConfirm').addEventListener('click',()=>$('#knowledgeDeleteModal').close('delete'));
+  $$('[data-main]').forEach(b=>b.addEventListener('click',async()=>{
+    try{if(state.main==='knowledge'&&state.knowledgeEditing)await closeKnowledgeDocument();}catch(e){showToast(e.message);return;}
     navigate(b.dataset.main==='memory'
       ? {main:'memory',memoryTab:state.memoryTab}
       : b.dataset.main==='knowledge' ? {main:'knowledge'}
@@ -842,21 +870,61 @@
   }));
   $('#knowledgeCollapseAll').addEventListener('click',()=>{state.knowledgeExpanded.clear();renderKnowledgeTree();});
   $('#knowledgeExpandAll').addEventListener('click',()=>{knowledgeFlat(state.knowledge).filter(n=>n.kind==='section').forEach(n=>state.knowledgeExpanded.add(n.id));renderKnowledgeTree();});
-  $('#knowledgeBack').addEventListener('click',closeKnowledgeDocument);
-  $('#knowledgeModeToggle').addEventListener('click',()=>{state.knowledgeEditing=!state.knowledgeEditing;renderKnowledgeMode();if(state.knowledgeEditing)$('#knowledgeEditor').focus();});
-  $('#knowledgeSave').addEventListener('click',()=>saveKnowledge().catch(e=>showToast(e.message)));
-  function closeKnowledgeDocument(){$('#knowledgeDocument').classList.add('hidden');$('#knowledgeTree').classList.remove('hidden');state.knowledgeDocument=null;}
+  $('#knowledgeBack').addEventListener('click',()=>closeKnowledgeDocument().catch(e=>showToast(e.message)));
+  $('#knowledgeModeToggle').addEventListener('click',async()=>{const button=$('#knowledgeModeToggle');if(button.disabled)return;button.disabled=true;try{if(state.knowledgeEditing)await saveKnowledge();state.knowledgeEditing=!state.knowledgeEditing;renderKnowledgeMode();if(state.knowledgeEditing)$('#knowledgeEditor').focus();}catch(e){showToast(e.message);}finally{button.disabled=false;}});
+  async function closeKnowledgeDocument(){if(state.knowledgeEditing)await saveKnowledge();$('#knowledgeDocument').classList.add('hidden');$('#knowledgeTree').classList.remove('hidden');state.knowledgeDocument=null;state.knowledgeEditing=false;}
   $('#knowledgeTree').addEventListener('click',async e=>{const addS=e.target.closest('[data-knowledge-add-section]'),addD=e.target.closest('[data-knowledge-add-doc]'),row=e.target.closest('[data-knowledge-id]');try{if(addS){await createKnowledge('section',addS.dataset.knowledgeAddSection||null);return;}if(addD){await createKnowledge('document',addD.dataset.knowledgeAddDoc||null);return;}if(!row)return;const n=knowledgeNode(row.dataset.knowledgeId);if(e.target.closest('.knowledge-toggle')||n.kind==='section'&&e.target.closest('.knowledge-node-title')){state.knowledgeExpanded.has(n.id)?state.knowledgeExpanded.delete(n.id):state.knowledgeExpanded.add(n.id);renderKnowledgeTree();}else if(n.kind==='document'){showKnowledgeDocument(await api(`/api/knowledge/documents/${n.id}`));}}catch(err){showToast(err.message);}});
   $('#knowledgeTree').addEventListener('contextmenu',e=>{const row=e.target.closest('[data-knowledge-id]');if(row){e.preventDefault();if(e.pointerType!=='touch')knowledgeContext(row.dataset.knowledgeId,e.clientX,e.clientY);}});
   async function dropKnowledge(id,targetRow,root,clientY){if(!id)return;let parentId=null,order=state.knowledge.length;if(targetRow){const target=knowledgeNode(targetRow.dataset.knowledgeId);if(!target||target.id===id)return;if(target.kind==='section'){parentId=target.id;order=(target.children||[]).length;}else{parentId=target.parentId;const rect=targetRow.getBoundingClientRect();order=target.order+(clientY>rect.top+rect.height/2?1:0);}}else if(!root)return;try{await moveKnowledge(id,parentId,order);}catch(err){showToast(err.message);}}
   const KNOWLEDGE_DRAG_START_TOLERANCE = 20;
-  let knowledgePress=null, suppressKnowledgeClickId=null;
-  $('#knowledgeTree').addEventListener('pointerdown',e=>{const row=e.target.closest('[data-knowledge-id]');if(!row||e.button!==0||e.target.closest('[data-knowledge-add-section],[data-knowledge-add-doc]'))return;if(e.pointerType!=='mouse')e.preventDefault();closeKnowledgeContext();const press={id:row.dataset.knowledgeId,row,x:e.clientX,y:e.clientY,pointerId:e.pointerId,moved:false,timer:null};press.timer=setTimeout(()=>{if(knowledgePress!==press||press.moved)return;suppressKnowledgeClickId=press.id;knowledgePress=null;knowledgeContext(press.id,press.x,press.y);},LONG_PRESS_MS);knowledgePress=press;});
-  document.addEventListener('pointermove',e=>{const press=knowledgePress;if(!press||press.pointerId!==e.pointerId)return;if(Math.hypot(e.clientX-press.x,e.clientY-press.y)<=KNOWLEDGE_DRAG_START_TOLERANCE)return;clearTimeout(press.timer);press.moved=true;press.row.classList.add('dragging');},true);
-  document.addEventListener('pointerup',async e=>{const press=knowledgePress;if(!press||press.pointerId!==e.pointerId)return;knowledgePress=null;clearTimeout(press.timer);if(!press.moved)return;press.row.classList.remove('dragging');const point=document.elementFromPoint(e.clientX,e.clientY);await dropKnowledge(press.id,point?.closest('[data-knowledge-id]'),point?.closest('[data-knowledge-root]'),e.clientY);},true);
-  document.addEventListener('pointercancel',e=>{if(knowledgePress?.pointerId===e.pointerId){clearTimeout(knowledgePress.timer);knowledgePress.row.classList.remove('dragging');knowledgePress=null;}},true);
+  let knowledgePress=null, suppressKnowledgeClickPoint=null;
+  function updateKnowledgeGhost(press,x,y){press.ghost.style.left=`${x-press.offsetX}px`;press.ghost.style.top=`${y-press.offsetY}px`;}
+  function clearKnowledgeDrag(press){press.row.classList.remove('dragging');press.ghost?.remove();press.dropTarget?.classList.remove('knowledge-drop-target');}
+  $('#knowledgeTree').addEventListener('pointerdown',e=>{
+    const row=e.target.closest('[data-knowledge-id]');
+    if(knowledgePress||!row||e.button!==0||e.target.closest('[data-knowledge-add-section],[data-knowledge-add-doc]'))return;
+    if(e.pointerType!=='mouse')e.preventDefault();
+    closeKnowledgeContext();
+    const press={id:row.dataset.knowledgeId,row,x:e.clientX,y:e.clientY,pointerId:e.pointerId,dragging:false,menuOpen:false,timer:null,ghost:null,dropTarget:null};
+    row.setPointerCapture(e.pointerId);
+    press.timer=setTimeout(()=>{if(knowledgePress!==press||press.dragging)return;press.menuOpen=true;knowledgeContext(press.id,press.x,press.y);},LONG_PRESS_MS);
+    knowledgePress=press;
+  });
+  document.addEventListener('pointermove',e=>{
+    const press=knowledgePress;if(!press||press.pointerId!==e.pointerId)return;
+    if(!press.dragging){
+      if(Math.hypot(e.clientX-press.x,e.clientY-press.y)<=KNOWLEDGE_DRAG_START_TOLERANCE)return;
+      clearTimeout(press.timer);
+      if(press.menuOpen)closeKnowledgeContext();
+      press.dragging=true;
+      press.row.classList.add('dragging');
+      const rect=press.row.getBoundingClientRect();
+      press.offsetX=press.x-rect.left;press.offsetY=press.y-rect.top;
+      press.ghost=press.row.cloneNode(true);
+      press.ghost.classList.remove('dragging');
+      press.ghost.classList.add('knowledge-drag-ghost');
+      press.ghost.setAttribute('aria-hidden','true');press.ghost.inert=true;
+      press.ghost.style.width=`${rect.width}px`;
+      document.body.append(press.ghost);
+    }
+    updateKnowledgeGhost(press,e.clientX,e.clientY);
+    const point=document.elementFromPoint(e.clientX,e.clientY);
+    const target=point?.closest('[data-knowledge-id],[data-knowledge-root]');
+    const next=target?.dataset.knowledgeId===press.id?null:target;
+    if(next!==press.dropTarget){press.dropTarget?.classList.remove('knowledge-drop-target');press.dropTarget=next;next?.classList.add('knowledge-drop-target');}
+  },true);
+  document.addEventListener('pointerup',e=>{
+    const press=knowledgePress;if(!press||press.pointerId!==e.pointerId)return;
+    knowledgePress=null;clearTimeout(press.timer);
+    if(!press.dragging){if(press.menuOpen)suppressKnowledgeClickPoint={x:e.clientX,y:e.clientY,until:Date.now()+700};return;}
+    const point=document.elementFromPoint(e.clientX,e.clientY);
+    clearKnowledgeDrag(press);
+    suppressKnowledgeClickPoint={x:e.clientX,y:e.clientY,until:Date.now()+700};
+    dropKnowledge(press.id,point?.closest('[data-knowledge-id]'),point?.closest('[data-knowledge-root]'),e.clientY);
+  },true);
+  document.addEventListener('pointercancel',e=>{const press=knowledgePress;if(!press||press.pointerId!==e.pointerId)return;clearTimeout(press.timer);clearKnowledgeDrag(press);if(press.menuOpen)closeKnowledgeContext();knowledgePress=null;},true);
   document.addEventListener('selectstart',e=>{if(e.target.closest('#knowledgeTree'))e.preventDefault();},true);
-  document.addEventListener('click',e=>{const pressedRow=e.target.closest('[data-knowledge-id]');if(suppressKnowledgeClickId){const suppress=pressedRow?.dataset.knowledgeId===suppressKnowledgeClickId;suppressKnowledgeClickId=null;if(suppress){e.preventDefault();e.stopImmediatePropagation();return;}}if(!e.target.closest('.knowledge-context-menu'))closeKnowledgeContext();},true);
+  document.addEventListener('click',e=>{const point=suppressKnowledgeClickPoint;const suppress=point&&Date.now()<point.until&&Math.hypot(e.clientX-point.x,e.clientY-point.y)<24;suppressKnowledgeClickPoint=null;if(suppress){e.preventDefault();e.stopImmediatePropagation();return;}if(!e.target.closest('.knowledge-context-menu'))closeKnowledgeContext();},true);
   $('#backlogTab').addEventListener('click',()=>navigate({main:'tasks',taskTab:'backlog',filter:'all'}));
   $('#todayTab').addEventListener('click',()=>navigate({main:'tasks',taskTab:'today',filter:'all'}));
   $$('.filter').forEach(b=>b.addEventListener('click',()=>navigate({main:'tasks',taskTab:'today',filter:b.dataset.filter})));
