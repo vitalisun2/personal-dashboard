@@ -38,6 +38,36 @@ public sealed class KnowledgeServiceTests
     }
 
     [TestMethod]
+    public async Task UntitledSectionsKeepIncreasingAfterDeletion()
+    {
+        var store = new InMemoryKnowledgeStore(new KnowledgeDocument());
+        var service = new KnowledgeService(store);
+
+        var first = await service.CreateAsync("section", null, null, null, CancellationToken.None);
+        var second = await service.CreateAsync("section", null, null, null, CancellationToken.None);
+        await service.DeleteAsync(second.Node!.Id, CancellationToken.None);
+        var third = await service.CreateAsync("section", null, null, null, CancellationToken.None);
+
+        Assert.AreEqual("Section 1", first.Node?.Title);
+        Assert.AreEqual("Section 2", second.Node?.Title);
+        Assert.AreEqual("Section 3", third.Node?.Title);
+        Assert.AreEqual(4, store.Value.NextSectionNumber);
+    }
+
+    [TestMethod]
+    public async Task UntitledSectionSkipsExistingNameFromOlderData()
+    {
+        var first = new KnowledgeNode { Kind = "section", Title = "Section 1" };
+        var last = new KnowledgeNode { Kind = "section", Title = "Section 7" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeDocument { Nodes = [first, last] });
+        var service = new KnowledgeService(store);
+
+        var created = await service.CreateAsync("section", null, null, null, CancellationToken.None);
+
+        Assert.AreEqual("Section 8", created.Node?.Title);
+    }
+
+    [TestMethod]
     public async Task MoveRejectsCycleAndKeepsTreeIntact()
     {
         var parent = new KnowledgeNode { Kind = "section", Title = "Parent" };

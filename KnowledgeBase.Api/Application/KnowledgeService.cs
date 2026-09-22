@@ -36,7 +36,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
     public async Task<(KnowledgeNode? Node, string? Error)> CreateAsync(string kind, string? title, string? content, Guid? parentId, CancellationToken ct)
     {
         var cleanTitle = title?.Trim();
-        if (kind != "document" && string.IsNullOrWhiteSpace(cleanTitle)) return (null, "Название обязательно.");
+        if (kind is not ("section" or "document")) return (null, "Тип узла не поддерживается.");
         await mutationGate.WaitAsync(ct);
         try {
             var data = await store.ReadAsync(ct);
@@ -53,6 +53,20 @@ public sealed class KnowledgeService(IKnowledgeStore store)
                 while (titles.Contains($"Doc {number}")) number++;
                 cleanTitle = $"Doc {number}";
                 data.NextDocumentNumber = number + 1;
+            }
+            if (kind == "section" && string.IsNullOrWhiteSpace(cleanTitle))
+            {
+                var number = Math.Max(1, data.NextSectionNumber);
+                foreach (var existing in data.Nodes)
+                    if (existing.IsSection
+                        && existing.Title.StartsWith("Section ", StringComparison.OrdinalIgnoreCase)
+                        && int.TryParse(existing.Title.AsSpan(8), out var existingNumber)
+                        && existingNumber >= number)
+                        number = existingNumber + 1;
+                var titles = data.Nodes.Where(node => node.IsSection).Select(node => node.Title).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                while (titles.Contains($"Section {number}")) number++;
+                cleanTitle = $"Section {number}";
+                data.NextSectionNumber = number + 1;
             }
             var now = DateTimeOffset.UtcNow;
             var node = new KnowledgeNode { Kind = kind, Title = cleanTitle!, Content = kind == "document" ? content ?? "" : null, ParentId = parentId, Order = NextOrder(data.Nodes, parentId), CreatedAt = now, UpdatedAt = now };

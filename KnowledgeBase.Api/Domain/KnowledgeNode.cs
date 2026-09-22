@@ -18,6 +18,7 @@ public sealed class KnowledgeDocument
 {
     public int SchemaVersion { get; set; } = 1;
     public int NextDocumentNumber { get; set; } = 1;
+    public int NextSectionNumber { get; set; } = 1;
     public List<KnowledgeNode> Nodes { get; set; } = [];
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
