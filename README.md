@@ -22,7 +22,7 @@
 - Фильтры: Все / Новые / В работе / Завершены.
 - Адаптивная верстка: sidebar на desktop, bottom navigation на mobile.
 - Все изменения сохраняются в одном внешнем `tasks.json`; Docker-клон не владеет данными.
-- «База знаний» работает отдельным `KnowledgeBase.Api` на порту `8081`, а её дерево и Markdown-документы сохраняются во внешнем `knowledge.json` рядом с `tasks.json`.
+- «База знаний» работает отдельным `KnowledgeBase.Api` на внешнем порту `8083`, а её дерево и Markdown-документы сохраняются во внешнем `knowledge.json` рядом с `tasks.json`.
 
 ## Запуск
 
@@ -56,7 +56,7 @@ docker compose up -d --build
 - `wwwroot/index.html` — интерфейс.
 - `wwwroot/styles.css` — адаптивные стили.
 - `wwwroot/app.js` — UI-логика и работа с API.
-- `KnowledgeBase.Api/` — отдельный Web API дерева базы знаний (разделы и Markdown-документы); фронтенд использует `window.KNOWLEDGE_API_BASE_URL` или `http(s)://<host>:8081`.
+- `KnowledgeBase.Api/` — отдельный Web API дерева базы знаний (разделы и Markdown-документы); фронтенд использует `window.KNOWLEDGE_API_BASE_URL` или `http(s)://<host>:8083`.
 - `tests/` — интеграционные тесты (xunit).
 
 ## Агент для title/description/section

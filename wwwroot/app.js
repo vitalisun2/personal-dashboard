@@ -17,7 +17,7 @@
   }
 
   async function api(url, options = {}) {
-    const base = window.KNOWLEDGE_API_BASE_URL || `${location.protocol}//${location.hostname}:8081`;
+    const base = window.KNOWLEDGE_API_BASE_URL || `${location.protocol}//${location.hostname}:8083`;
     const target = url.startsWith('/api/knowledge') ? `${base}${url}` : url;
     const response = await fetch(target, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
     if (!response.ok) { let m='Ошибка запроса.'; try { m=(await response.json()).message||m; } catch {} throw new Error(m); }
