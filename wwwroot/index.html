@@ -36,7 +36,7 @@
 
             <form id="addForm" class="add-form">
               <input id="taskInput" type="text" placeholder="Опиши новую задачу…" autocomplete="off">
-              <button class="primary" type="submit">Добавить</button>
+              <button class="primary" type="submit">Chat</button>
             </form>
 
             <div id="filters" class="filters hidden">
@@ -49,6 +49,15 @@
 
           <div id="taskList" class="task-list"></div>
           <div id="emptyState" class="empty hidden">Здесь пока нет задач.</div>
+        </section>
+
+        <section id="chatView" class="chat-view hidden" aria-label="Чат с агентом">
+          <div class="detail-backbar"><button id="chatBackButton" class="back-button" type="button">← Backlog</button></div>
+          <div class="chat-inner">
+            <h1>Chat</h1>
+            <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+            <form id="chatForm" class="chat-form"><input id="chatInput" type="text" maxlength="2000" placeholder="Напишите сообщение…" autocomplete="off"><button class="primary" type="submit">Отправить</button></form>
+          </div>
         </section>
 
         <section id="detailView" class="detail hidden">

@@ -11,6 +11,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
 });
 builder.Services.AddSingleton<TaskStore>();
+builder.Services.AddSingleton<ChatSessionStore>();
 builder.Services.AddSingleton<IMemoryRepository, MemoryRepository>();
 builder.Services.AddSingleton<ITaskAgent>(_ => new LlmTaskAgent(
     providers: [
@@ -24,6 +25,8 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapGet("/api/tasks", async (TaskStore store) => Results.Ok(await store.GetAllAsync()));
+
+app.MapChatRoutes();
 
 app.MapPost("/api/tasks", async (CreateTaskRequest request, TaskStore store, ITaskAgent agent) =>
 {
@@ -295,6 +298,7 @@ enum TaskStatus { New, InProgress, Completed }
 
 interface ITaskAgent
 {
+    Task<string> ChatAsync(string text);
     Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections);
     Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections);
     Task<TaskDraft> EditDraftAsync(TaskDraft current, string instruction, IReadOnlyCollection<string> existingSections);
@@ -347,6 +351,20 @@ sealed class LlmTaskAgent : ITaskAgent
         }
         _logger.LogInformation("Все LLM-провайдеры недоступны, используется эвристика");
         return await _fallback.CreateDraftAsync(rawText, existingSections);
+    }
+
+    public async Task<string> ChatAsync(string text)
+    {
+        foreach (var provider in _providers)
+        {
+            try
+            {
+                var reply = await provider.TryChatAsync(text);
+                if (!string.IsNullOrWhiteSpace(reply)) return reply.Trim();
+            }
+            catch (Exception ex) { _logger.LogWarning("Провайдер {Provider} не обработал чат: {Message}", provider.Name, ex.Message); }
+        }
+        return await _fallback.ChatAsync(text);
     }
 
     public async Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections)
@@ -408,6 +426,7 @@ interface ILlmProvider
 {
     string Name { get; }
     Task<TaskDraft?> TryParseAsync(string rawText, IReadOnlyCollection<string> existingSections);
+    Task<string?> TryChatAsync(string text);
 }
 
 abstract class HttpLlmProvider : ILlmProvider
@@ -420,6 +439,7 @@ abstract class HttpLlmProvider : ILlmProvider
     protected abstract string ChatUrl { get; }
     protected virtual void AddAuth(HttpRequestMessage request) { }
     protected abstract object BuildPayload(string rawText, IReadOnlyCollection<string> existingSections);
+    protected abstract object BuildChatPayload(string text);
 
     protected static string? ReadEnv(string name, string? fallback) =>
         Environment.GetEnvironmentVariable(name) is { Length: > 0 } value ? value : fallback;
@@ -438,6 +458,19 @@ abstract class HttpLlmProvider : ILlmProvider
 
         var json = await response.Content.ReadAsStringAsync();
         return ExtractDraft(json, rawText);
+    }
+
+    public virtual async Task<string?> TryChatAsync(string text)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, ChatUrl)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(BuildChatPayload(text)), Encoding.UTF8, "application/json")
+        };
+        AddAuth(request);
+        using var response = await _http.SendAsync(request);
+        if (!response.IsSuccessStatusCode) return null;
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return document.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
     }
 
     // Достаёт {title, description, section} из тела ответа; при ошибке парсинга — null,
@@ -528,6 +561,17 @@ sealed class OllamaClient : HttpLlmProvider
             }
         }
     };
+
+    protected override object BuildChatPayload(string text) => new
+    {
+        model = _model,
+        temperature = 0.3,
+        messages = new[]
+        {
+            new { role = "system", content = "Ты свободный помощник личного дашборда. Отвечай кратко и по существу на вопрос пользователя. Не выполняй никаких действий и не выдумывай доступ к внешним инструментам." },
+            new { role = "user", content = text }
+        }
+    };
 }
 
 // 1. Подписочный OpenRouter (DeepSeek): основной разборщик, включается при наличии ключа
@@ -563,6 +607,12 @@ sealed class OpenRouterClient : HttpLlmProvider
         return await base.TryParseAsync(rawText, existingSections);
     }
 
+    public override async Task<string?> TryChatAsync(string text)
+    {
+        if (string.IsNullOrEmpty(_apiKey)) return null;
+        return await base.TryChatAsync(text);
+    }
+
     protected override object BuildPayload(string rawText, IReadOnlyCollection<string> existingSections) => new
     {
         model = _model,
@@ -574,11 +624,24 @@ sealed class OpenRouterClient : HttpLlmProvider
         },
         response_format = new { type = "json_object" }
     };
+
+    protected override object BuildChatPayload(string text) => new
+    {
+        model = _model,
+        temperature = 0.3,
+        messages = new[]
+        {
+            new { role = "system", content = "Ты свободный помощник личного дашборда. Отвечай кратко и по существу на вопрос пользователя. Не выполняй никаких действий и не выдумывай доступ к внешним инструментам." },
+            new { role = "user", content = text }
+        }
+    };
 }
 
 // 3. Эвристика без сети: title из первого предложения, раздел — по ключевым словам
 sealed class LocalTaskAgent : ITaskAgent
 {
+    public Task<string> ChatAsync(string text) => Task.FromResult($"Вы спросили: {text.Trim()}\n\nЯ могу помочь разобраться с этим и выполнить только изменения в задачнике: создать, отредактировать или перенести задачу.");
+
     public Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections)
     {
         var normalized = string.Join(' ', rawText.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));

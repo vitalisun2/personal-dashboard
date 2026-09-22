@@ -135,6 +135,8 @@
       return { main: 'memory', memoryTab, lessonId: params.get('lesson'), problemId: params.get('problem'), skillId: params.get('skill') };
     }
 
+    if (parts[0] === 'tasks' && parts[1] === 'chat') return { main: 'tasks', chat: true, sessionId: params.get('session') };
+
     const taskTab = taskTabs.has(parts[1]) ? parts[1] : 'backlog';
     const filter = taskTab === 'today' && ['new', 'in_progress', 'completed'].includes(params.get('filter'))
       ? params.get('filter')
@@ -150,6 +152,7 @@
       if (route.skillId) params.set('skill', route.skillId);
       return `#/memory/${route.memoryTab || 'overview'}${params.size ? `?${params}` : ''}`;
     }
+    if (route.chat) return `#/tasks/chat${route.sessionId ? `?session=${encodeURIComponent(route.sessionId)}` : ''}`;
     if (route.filter && route.filter !== 'all') params.set('filter', route.filter);
     if (route.taskId) params.set('task', route.taskId);
     return `#/tasks/${route.taskTab || 'backlog'}${params.size ? `?${params}` : ''}`;
@@ -183,6 +186,8 @@
     state.taskTab = route.taskTab;
     state.taskFilter = route.filter;
     setMain('tasks');
+    if (route.chat) { closeTaskDetail(); $('#listView').classList.add('hidden'); $('#chatView').classList.remove('hidden'); loadChat(route.sessionId); return; }
+    $('#chatView').classList.add('hidden');
     const task = route.taskId && state.tasks.find(item => String(item.id) === String(route.taskId));
     if (task) {
       state.taskTab = task.bucket;
@@ -192,6 +197,26 @@
       closeTaskDetail();
       renderTasks();
     }
+  }
+
+  async function loadChat(sessionId) {
+    if (!sessionId) return;
+    const data = await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
+    renderChat(data);
+  }
+  function renderChat(data) {
+    const box = $('#chatMessages'); box.textContent = '';
+    (data.messages || []).forEach(message => { const bubble = document.createElement('div'); bubble.className = `chat-bubble ${message.role === 'user' ? 'chat-user' : 'chat-agent'}`; bubble.textContent = message.text; box.append(bubble); });
+    box.scrollTop = box.scrollHeight;
+  }
+  async function sendChatMessage(text) {
+    const route = parseRoute();
+    const data = route.sessionId
+      ? await api(`/api/chat/sessions/${encodeURIComponent(route.sessionId)}/messages`, { method: 'POST', body: JSON.stringify({ text }) })
+      : await api('/api/chat/sessions', { method: 'POST', body: JSON.stringify({ text }) });
+    const sessionId = data.session.id;
+    if (!route.sessionId) navigate({ main: 'tasks', chat: true, sessionId }, { replace: true });
+    renderChat(data.session);
   }
 
   function applyCurrentRoute() {
@@ -801,7 +826,9 @@
   $('#backButton').addEventListener('click',()=>goBack({main:'tasks',taskTab:state.taskTab,filter:state.taskFilter}));
     $('#detailDescription').addEventListener('click', beginDescriptionEdit);
     $('#detailTitle').addEventListener('click', beginTitleEdit);
-  $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();if(!text)return;const orig=btn.textContent;btn.disabled=true;btn.classList.add('sending');btn.textContent='Готовим…';try{openTaskDraft(await api('/api/tasks/draft',{method:'POST',body:JSON.stringify({text})}));}catch(err){showToast(err.message);}finally{btn.disabled=false;btn.classList.remove('sending');btn.textContent=orig;}});
+  $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();if(!text)return;btn.disabled=true;btn.classList.add('sending');try{$('#taskInput').value='';navigate({main:'tasks',chat:true,sessionId:null},{replace:false});await sendChatMessage(text);}catch(err){showToast(err.message);navigate({main:'tasks',taskTab:'backlog',filter:'all'},{replace:true});}finally{btn.disabled=false;btn.classList.remove('sending');}});
+  $('#chatForm').addEventListener('submit',async e=>{e.preventDefault();const input=$('#chatInput');const text=input.value.trim();if(!text)return;input.value='';try{await sendChatMessage(text);}catch(err){showToast(err.message);}});
+  $('#chatBackButton').addEventListener('click',()=>navigate({main:'tasks',taskTab:'backlog',filter:'all'}));
   $('#taskDraftForm').addEventListener('submit', e => { e.preventDefault(); reviseTaskDraft(); });
   $('#taskDraftConfirm').addEventListener('click', confirmTaskDraft);
   $('#taskDraftCancel').addEventListener('click', closeTaskDraft);
