@@ -502,7 +502,50 @@ public sealed class ScopedChatTests
     }
 
     [TestMethod]
-    public async Task GemmaMutationClassifierReceivesNativeJsonSchemaAndContextOptions()
+    public async Task DeepSeekKnowledgeClassifierUsesSupportedJsonObjectFormatAndParsesIntent()
+    {
+        var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        var oldFile = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE");
+        var oldRouter = Environment.GetEnvironmentVariable("OPENROUTER_URL");
+        var oldOllama = Environment.GetEnvironmentVariable("OLLAMA_URL");
+        string? sentBody = null;
+        var handler = new StubHttpHandler(request =>
+        {
+            sentBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            var result = "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":\"Что о декоре?\",\"answer\":\"В документе «Декор» описаны идеи оформления.\",\"operations\":[]}";
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = result } } } }))
+            };
+        });
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", "test-only-key");
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", null);
+        Environment.SetEnvironmentVariable("OPENROUTER_URL", "https://router.test/v1");
+        Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
+        try
+        {
+            var responder = new ReadOnlyChatResponder(new HttpClient(handler));
+            var result = await ((IKnowledgeIntentRouter)responder).ClassifyAsync("Где есть информация про декор?", null, "Полный снимок знаний", CancellationToken.None);
+
+            Assert.AreEqual("ok", result.Status);
+            Assert.AreEqual("conversation", result.Intent!.Kind);
+            Assert.AreEqual("В документе «Декор» описаны идеи оформления.", result.Intent.Answer);
+            using var sent = System.Text.Json.JsonDocument.Parse(sentBody!);
+            Assert.AreEqual("json_object", sent.RootElement.GetProperty("response_format").GetProperty("type").GetString());
+            Assert.IsTrue(sent.RootElement.GetProperty("messages").EnumerateArray().Any(message => message.GetProperty("content").GetString()!.Contains("Полный снимок знаний", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", oldKey);
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", oldFile);
+            Environment.SetEnvironmentVariable("OPENROUTER_URL", oldRouter);
+            Environment.SetEnvironmentVariable("OLLAMA_URL", oldOllama);
+            handler.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public async Task GemmaKnowledgeClassifierUsesJsonFormatAndParsesIntent()
     {
         var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
         var oldFile = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE");
@@ -533,9 +576,50 @@ public sealed class ScopedChatTests
             Assert.AreEqual("gemma4:e4b-it-qat", sent.RootElement.GetProperty("model").GetString());
             Assert.IsFalse(sent.RootElement.GetProperty("think").GetBoolean());
             Assert.AreEqual(65536, sent.RootElement.GetProperty("options").GetProperty("num_ctx").GetInt32());
-            var format = sent.RootElement.GetProperty("format");
-            Assert.AreEqual("object", format.GetProperty("type").GetString());
-            Assert.IsTrue(format.GetProperty("required").EnumerateArray().Any(item => item.GetString() == "kind"));
+            Assert.AreEqual("json", sent.RootElement.GetProperty("format").GetString());
+            var systemPrompt = sent.RootElement.GetProperty("messages")[0].GetProperty("content").GetString();
+            Assert.IsTrue(systemPrompt!.Contains("\"required\":[\"kind\",\"reference\",\"title\",\"content\",\"section\",\"question\",\"answer\",\"operations\"]", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", oldKey);
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", oldFile);
+            Environment.SetEnvironmentVariable("OLLAMA_URL", oldOllama);
+            Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", oldModel);
+            handler.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public async Task GemmaConfirmationPromptIncludesExactDecisionSchema()
+    {
+        var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        var oldFile = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE");
+        var oldOllama = Environment.GetEnvironmentVariable("OLLAMA_URL");
+        var oldModel = Environment.GetEnvironmentVariable("OLLAMA_CHAT_MODEL");
+        string? sentBody = null;
+        var handler = new StubHttpHandler(request =>
+        {
+            sentBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            var response = new { message = new { content = "{\"decision\":\"approve\",\"confidence\":0.99}" } };
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(response)) };
+        });
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", null);
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", null);
+        Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
+        Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", "gemma4:e4b-it-qat");
+        try
+        {
+            var responder = new ReadOnlyChatResponder(new HttpClient(handler));
+            var result = await ((IModelAwareKnowledgeIntentRouter)responder).ClassifyConfirmationAsync("Предпросмотр", "да", AC.ChatModel.Gemma, CancellationToken.None);
+
+            Assert.AreEqual("ok", result.Status);
+            Assert.AreEqual("approve", result.Decision);
+            using var sent = System.Text.Json.JsonDocument.Parse(sentBody!);
+            Assert.AreEqual("json", sent.RootElement.GetProperty("format").GetString());
+            var systemPrompt = sent.RootElement.GetProperty("messages")[0].GetProperty("content").GetString();
+            Assert.IsTrue(systemPrompt!.Contains("\"required\":[\"decision\",\"confidence\"]", StringComparison.Ordinal));
+            Assert.IsTrue(systemPrompt.Contains("\"minimum\":0,\"maximum\":1", StringComparison.Ordinal));
         }
         finally
         {
