@@ -285,8 +285,9 @@ public sealed class ScopedChatTests
         var oldFile = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE");
         var oldOllama = Environment.GetEnvironmentVariable("OLLAMA_URL");
         var oldModel = Environment.GetEnvironmentVariable("OLLAMA_CHAT_MODEL");
-        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Финансы", Content = "Актуальный лимит: 1200", ParentId = null };
-        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        var art = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Арт - необходимый минимум", Content = "Декор для каждой локации" };
+        var notes = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Мысли", Content = "Идеи про декор" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [art, notes] });
         string? qaPayload = null;
         string? qaModel = null;
         var requests = new List<string>();
@@ -312,15 +313,15 @@ public sealed class ScopedChatTests
         try
         {
             var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), new ReadOnlyChatResponder(new HttpClient(handler)));
-            var reply = await facade.HandleAsync(new AC.ChatTurn("Какой лимит?", true, null, []), CancellationToken.None);
+            var reply = await facade.HandleAsync(new AC.ChatTurn("в каком из документов есть информация про декор и что там если вкратце написано", true, null, []), CancellationToken.None);
             Assert.AreEqual("Ответ по документу", reply.Text);
             Assert.AreEqual(1, store.Reads, "The complete knowledge snapshot should come from one current store read.");
             Assert.IsNotNull(qaPayload);
             using var sent = System.Text.Json.JsonDocument.Parse(qaPayload);
             var sentContents = sent.RootElement.GetProperty("messages").EnumerateArray().Select(message => message.GetProperty("content").GetString() ?? "").ToArray();
-            Assert.IsTrue(sentContents.Any(content => content.Contains("Финансы", StringComparison.Ordinal) && content.Contains("Актуальный лимит: 1200", StringComparison.Ordinal)));
+            Assert.IsTrue(sentContents.Any(content => content.Contains("Арт - необходимый минимум", StringComparison.Ordinal) && content.Contains("Декор для каждой локации", StringComparison.Ordinal) && content.Contains("Мысли", StringComparison.Ordinal) && content.Contains("Идеи про декор", StringComparison.Ordinal)));
             Assert.AreEqual("qwen3:8b-64k", qaModel);
-            CollectionAssert.AreEqual(new[] { "ollama.test", "ollama.test" }, requests);
+            CollectionAssert.AreEqual(new[] { "ollama.test" }, requests);
             Assert.AreEqual(0, store.Writes);
         }
         finally
