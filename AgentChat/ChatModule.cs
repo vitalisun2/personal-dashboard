@@ -6,10 +6,11 @@ using Microsoft.Extensions.DependencyInjection;
 namespace AgentChat;
 
 public enum ChatScope { Tasks, Knowledge }
-public sealed record ChatMessageRequest(string? Text);
+public enum ChatModel { DeepSeek, Gemma }
+public sealed record ChatMessageRequest(string? Text, string? Model = null);
 public sealed record ChatMessage(Guid Id, string Role, string Text, DateTimeOffset CreatedAt);
 public sealed record ChatPending(string Kind, string Data);
-public sealed record ChatTurn(string Text, bool IsInitial, ChatPending? Pending, IReadOnlyList<ChatMessage> History);
+public sealed record ChatTurn(string Text, bool IsInitial, ChatPending? Pending, IReadOnlyList<ChatMessage> History, ChatModel Model = ChatModel.DeepSeek);
 public sealed record ChatSession(Guid Id, ChatScope Scope, List<ChatMessage> Messages, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, ChatPending? Pending = null);
 public sealed record ChatReply(string Text, bool NeedsClarification, bool ChangedData = false, ChatPending? Pending = null);
 
@@ -84,6 +85,13 @@ public sealed class ChatService(IChatSessionStore sessions, IEnumerable<IChatCom
     public async Task<(ChatSession? Session, ChatReply? Reply, string? Error)> SendAsync(Guid? id, ChatScope scope, ChatMessageRequest request, CancellationToken ct)
     {
         var text = request.Text?.Trim();
+        var model = request.Model?.Trim().ToLowerInvariant() switch
+        {
+            null or "" or "deepseek" => ChatModel.DeepSeek,
+            "gemma" => ChatModel.Gemma,
+            _ => (ChatModel?)null
+        };
+        if (model is null) return (null, null, "Неизвестная модель чата. Выберите DeepSeek или Gemma.");
         if (!_facades.TryGetValue(scope, out var facade)) return (null, null, "Область чата недоступна.");
         ChatSession? session;
         var initial = id is null;
@@ -94,7 +102,7 @@ public sealed class ChatService(IChatSessionStore sessions, IEnumerable<IChatCom
         if (id is null) session = await sessions.CreateAsync(scope, text, ct);
         else { session = await sessions.GetAsync(id.Value, ct); if (session is null || session.Scope != scope) return (null, null, "Сессия не найдена в этой области."); if (session.Messages.Count(x => x.Role == "user") >= MaxUserTurns) return (session, null, "Лимит беседы — 20 ваших сообщений. Начните новый чат."); if (session.Messages.Sum(x => x.Text.Length) + text.Length > MaxConversationCharacters) return (session, null, "Контекст беседы слишком большой. Начните новый чат."); session = await sessions.AppendAsync(session.Id, new ChatMessage(Guid.NewGuid(), "user", text, DateTimeOffset.UtcNow)); if (session is null) return (null, null, "Сессия не найдена в этой области."); }
         var reply = facade is IChatConversationFacade conversationFacade
-            ? await conversationFacade.HandleAsync(new ChatTurn(text, initial, session.Pending, session.Messages), ct)
+            ? await conversationFacade.HandleAsync(new ChatTurn(text, initial, session.Pending, session.Messages, model.Value), ct)
             : await facade.HandleAsync(text, initial, ct);
         var updated = await sessions.AppendAsync(session.Id, new ChatMessage(Guid.NewGuid(), "agent", reply.Text, DateTimeOffset.UtcNow));
         if (updated is not null) updated = await sessions.SetPendingAsync(updated.Id, reply.Pending, ct);

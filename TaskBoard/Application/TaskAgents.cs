@@ -25,7 +25,7 @@ public static class TaskPrompt
 }
 
 /// <summary>Preserves the existing OpenRouter → Ollama → deterministic local fallback cascade.</summary>
-public sealed class LlmTaskAgent : ITaskAgent
+public sealed class LlmTaskAgent : ITaskAgent, IModelSelectableTaskAgent
 {
     private readonly ILlmProvider[] _providers;
     private readonly ITaskAgent _fallback;
@@ -65,6 +65,49 @@ public sealed class LlmTaskAgent : ITaskAgent
         }
         return null;
     }
+    public async Task<string?> ResolveChatActionAsync(IReadOnlyList<TaskConversationMessage> context, bool gemmaOnly)
+    {
+        foreach (var provider in SelectedProviders(gemmaOnly))
+        {
+            if (provider.Name.StartsWith("Ollama", StringComparison.Ordinal) && context.Sum(message => System.Text.Encoding.UTF8.GetByteCount(message.Text)) > 32_000) continue;
+            try { if (await provider.TryChatAsync(context) is { Length: > 0 } reply) return reply.Trim(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Провайдер {Provider} не обработал намерение чата", provider.Name); }
+        }
+        throw ModelUnavailable(gemmaOnly);
+    }
+    public async Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> sections, bool gemmaOnly)
+    {
+        foreach (var provider in SelectedProviders(gemmaOnly))
+        {
+            try
+            {
+                if (await provider.TryParseAsync(rawText, sections) is { } draft)
+                {
+                    if (draft.Section.Equals("Общее", StringComparison.OrdinalIgnoreCase) && !LocalTaskAgent.FallbackSection(rawText, sections).Equals("Общее", StringComparison.OrdinalIgnoreCase)) draft = draft with { Section = LocalTaskAgent.FallbackSection(rawText, sections) };
+                    return draft;
+                }
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "Провайдер {Provider} не подготовил задачу", provider.Name); }
+        }
+        throw ModelUnavailable(gemmaOnly);
+    }
+    public async Task<string> ChatAsync(string text, IReadOnlyList<TaskConversationMessage>? history, bool gemmaOnly)
+    {
+        var context = history is { Count: > 0 } ? history : [new TaskConversationMessage("user", text)];
+        foreach (var provider in SelectedProviders(gemmaOnly))
+        {
+            if (provider.Name.StartsWith("Ollama", StringComparison.Ordinal) && context.Sum(message => System.Text.Encoding.UTF8.GetByteCount(message.Text)) > 32_000) continue;
+            try { if (await provider.TryChatAsync(context) is { Length: > 0 } reply) return reply.Trim(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Провайдер {Provider} не ответил в чате", provider.Name); }
+        }
+        throw ModelUnavailable(gemmaOnly);
+    }
+    private IEnumerable<ILlmProvider> SelectedProviders(bool gemmaOnly) => gemmaOnly
+        ? _providers.Where(provider => provider.Name.StartsWith("Ollama", StringComparison.Ordinal))
+        : _providers;
+    private static ChatModelUnavailableException ModelUnavailable(bool gemmaOnly) => new(gemmaOnly
+        ? "Модель Gemma сейчас недоступна. Умный чат временно не может ответить или подготовить изменение; обычные функции раздела продолжают работать."
+        : "DeepSeek и локальная Gemma сейчас недоступны. Умный чат временно не может ответить или подготовить изменение; обычные функции раздела продолжают работать.");
     private async Task<TaskDraft> ParseOrFallbackAsync(string text, IReadOnlyCollection<string> sections, Func<Task<TaskDraft>> fallback)
     { foreach (var provider in _providers) try { if (await provider.TryParseAsync(text, sections) is { } draft) return draft; } catch (Exception ex) { _logger.LogWarning(ex, "Провайдер {Provider} недоступен", provider.Name); } return await fallback(); }
 }

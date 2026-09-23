@@ -19,4 +19,13 @@ public interface ITaskAgent
     Task<string?> ResolveChatActionAsync(IReadOnlyList<TaskConversationMessage> context) => Task.FromResult<string?>(null);
 }
 
+public interface IModelSelectableTaskAgent
+{
+    Task<string?> ResolveChatActionAsync(IReadOnlyList<TaskConversationMessage> context, bool gemmaOnly);
+    Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections, bool gemmaOnly);
+    Task<string> ChatAsync(string text, IReadOnlyList<TaskConversationMessage>? history, bool gemmaOnly);
+}
+
+public sealed class ChatModelUnavailableException(string message) : Exception(message);
+
 public sealed record TaskConversationMessage(string Role, string Text);

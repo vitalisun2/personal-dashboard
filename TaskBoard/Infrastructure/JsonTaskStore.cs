@@ -6,6 +6,11 @@ using TaskBoard.Domain;
 
 namespace TaskBoard.Infrastructure;
 
+public sealed record TaskBatchUpdate(Guid Id, string ExpectedTitle, string ExpectedDescription, string ExpectedSection, string Title, string Description, string Section);
+public sealed record TaskBatchResult(bool Applied, string? Error);
+public sealed record TaskSectionRename(string OldName, string NewName, Guid[] ExpectedTaskIds);
+public sealed record TaskSectionRenameResult(bool Applied, string? Error);
+
 /// <summary>JSON persistence owned by the task module. It deliberately keeps the established tasks.json contract.</summary>
 public sealed class TaskStore : ITaskRepository
 {
@@ -52,6 +57,88 @@ public sealed class TaskStore : ITaskRepository
             items[index] = update(items[index]);
             await WriteUnsafeAsync(items, cancellationToken);
             return items[index];
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<TaskBatchResult> ApplyBatchIfCurrentAsync(IReadOnlyList<TaskBatchUpdate> updates, CancellationToken cancellationToken = default)
+    {
+        if (updates.Count == 0) return new(false, "Пакет изменений пуст.");
+        if (updates.Any(update => update.Id == Guid.Empty) || updates.Select(update => update.Id).Distinct().Count() != updates.Count)
+            return new(false, "В пакете есть пустой или повторяющийся идентификатор задачи.");
+        if (updates.Any(update => string.IsNullOrWhiteSpace(update.Title) || string.IsNullOrWhiteSpace(update.Section)))
+            return new(false, "Название задачи и раздел обязательны.");
+        if (updates.Any(update => !string.Equals(update.ExpectedSection, update.Section, StringComparison.Ordinal)))
+            return new(false, "Перенос задач в другой раздел через чат не поддерживается.");
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var items = await ReadUnsafeAsync(cancellationToken);
+            var byId = items.ToDictionary(item => item.Id);
+            foreach (var update in updates)
+            {
+                if (!byId.TryGetValue(update.Id, out var current)) return new(false, "Одна из задач больше не существует.");
+                if (!string.Equals(current.Title, update.ExpectedTitle, StringComparison.Ordinal)
+                    || !string.Equals(current.Description, update.ExpectedDescription, StringComparison.Ordinal)
+                    || !string.Equals(current.Section, update.ExpectedSection, StringComparison.Ordinal))
+                    return new(false, "Данные одной из задач изменились после подготовки правки. Повторите запрос с актуальными данными.");
+            }
+
+            foreach (var update in updates)
+            {
+                var index = items.FindIndex(item => item.Id == update.Id);
+                items[index] = items[index] with { Title = update.Title.Trim(), Description = update.Description, Section = update.Section };
+            }
+            await WriteUnsafeAsync(items, cancellationToken);
+            return new(true, null);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<TaskSectionRenameResult> ApplySectionRenamesIfMembersAsync(IReadOnlyList<TaskSectionRename> renames, CancellationToken cancellationToken = default)
+    {
+        if (renames.Count == 0) return new(false, "Пакет переименования разделов пуст.");
+        var normalized = renames.Select(rename => new
+        {
+            Rename = rename,
+            OldName = rename.OldName?.Trim() ?? string.Empty,
+            NewName = rename.NewName?.Trim() ?? string.Empty,
+            ExpectedIds = rename.ExpectedTaskIds ?? []
+        }).ToArray();
+        if (normalized.Any(item => item.OldName.Length == 0 || item.NewName.Length == 0))
+            return new(false, "Название раздела обязательно.");
+        if (normalized.Select(item => item.OldName).Distinct(StringComparer.OrdinalIgnoreCase).Count() != normalized.Length
+            || normalized.Select(item => item.NewName).Distinct(StringComparer.OrdinalIgnoreCase).Count() != normalized.Length)
+            return new(false, "В пакете есть повторяющиеся разделы.");
+        if (normalized.Any(item => item.ExpectedIds.Length == 0 || item.ExpectedIds.Distinct().Count() != item.ExpectedIds.Length))
+            return new(false, "Для каждого раздела нужен непустой список уникальных задач.");
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var items = await ReadUnsafeAsync(cancellationToken);
+            var renamedOldNames = normalized.Select(item => item.OldName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in normalized)
+            {
+                var actualIds = items.Where(task => task.Section.Equals(item.OldName, StringComparison.OrdinalIgnoreCase)).Select(task => task.Id).ToHashSet();
+                if (actualIds.Count == 0 || !actualIds.SetEquals(item.ExpectedIds))
+                    return new(false, "Состав одного из разделов изменился после подготовки переименования. Повторите запрос с актуальными данными.");
+            }
+
+            var destinationNames = normalized.Select(item => item.NewName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var untouchedSections = items.Select(task => task.Section).Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(section => !renamedOldNames.Contains(section)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (destinationNames.Overlaps(untouchedSections))
+                return new(false, "Раздел с таким названием уже существует.");
+
+            foreach (var item in normalized)
+            {
+                foreach (var index in Enumerable.Range(0, items.Count).Where(index => items[index].Section.Equals(item.OldName, StringComparison.OrdinalIgnoreCase)))
+                    items[index] = items[index] with { Section = item.NewName };
+            }
+            await WriteUnsafeAsync(items, cancellationToken);
+            return new(true, null);
         }
         finally { _gate.Release(); }
     }

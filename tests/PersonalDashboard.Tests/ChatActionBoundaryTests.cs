@@ -43,12 +43,13 @@ public sealed class ChatActionBoundaryTests
         var decoy = new TaskItem(Guid.NewGuid(), "Обновить заметки", "Собрать итоги", "Общее", TaskBucket.Backlog, BoardStatus.New, DateTimeOffset.UtcNow);
         await store.AddAsync(target);
         await store.AddAsync(decoy);
-        var agent = new ScopedMutationAgent($"{{\"kind\":\"update_task\",\"taskId\":\"{target.Id}\",\"reference\":\"Подготовить релиз\",\"title\":\"Подготовить релиз\",\"description\":\"Проверить сборку\\nПроверить заметки о декоре\",\"descriptionMode\":\"append\",\"section\":\"Личный дашборд\",\"oldName\":null,\"newName\":null,\"answer\":null,\"question\":null}}");
+        var agent = new ScopedMutationAgent($"{{\"kind\":\"update_task\",\"taskId\":\"{target.Id}\",\"reference\":\"Подготовить релиз\",\"title\":\"Подготовить релиз\",\"description\":\"Проверить сборку\\nПроверить заметки о декоре\",\"descriptionMode\":\"append\",\"section\":\"Личный дашборд\",\"oldName\":null,\"newName\":null,\"answer\":null,\"question\":null,\"answer\":null,\"operations\":[]}}");
         var service = new TaskChatService(store, agent);
 
-        var question = await service.HandleAsync("Можно ли переписать описание задачи про подготовку релиза?");
+        var questionAgent = new ScopedMutationAgent("{\"kind\":\"answer\",\"answer\":\"В задаче описана проверка сборки.\"}");
+        var question = await new TaskChatService(store, questionAgent).HandleAsync("Что написано в задаче про подготовку релиза");
         Assert.IsFalse(question.NeedsClarification);
-        Assert.AreEqual("", agent.LastSystemMessage, "Questions should go straight to scoped QA instead of invoking the mutation resolver.");
+        Assert.Contains(decoy.Id.ToString(), questionAgent.LastSystemMessage, "Questions without punctuation should reach the classifier with the full snapshot.");
 
         var preview = await service.HandleAsync("Дополни описание задачи про подготовку релиза сведениями о декоре", cancellationToken: CancellationToken.None);
 
@@ -70,7 +71,7 @@ public sealed class ChatActionBoundaryTests
         var kbDocument = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Арт - необходимый минимум", Content = "В каждой локации нужен базовый набор декора." };
         var knowledgeStore = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [kbDocument] });
         var kbResponses = new Queue<string>([
-            "{\"kind\":\"replace_document\",\"reference\":\"Арт - необходимый минимум\",\"title\":null,\"content\":\"Для каждой локации нужен базовый декор.\",\"section\":null,\"question\":null}",
+            "{\"kind\":\"replace_document\",\"reference\":\"Арт - необходимый минимум\",\"title\":null,\"content\":\"Для каждой локации нужен базовый декор.\",\"section\":null,\"question\":null,\"answer\":null,\"operations\":[]}",
             "{\"decision\":\"approve\",\"confidence\":0.99}"
         ]);
         string? classifierBody = null;
@@ -112,6 +113,85 @@ public sealed class ChatActionBoundaryTests
             Environment.SetEnvironmentVariable("OPENROUTER_URL", oldRouter);
             http.Dispose();
         }
+    }
+
+    [TestMethod]
+    public async Task ClassifierHandlesNaturalRewriteWithoutQuestionMarkAndBatchTaskEdits()
+    {
+        var store = NewStore();
+        var target = new TaskItem(Guid.NewGuid(), "Задача про коней", "Старое описание", "Работа", TaskBucket.Backlog, BoardStatus.New, DateTimeOffset.UtcNow);
+        var second = new TaskItem(Guid.NewGuid(), "Купить корм", "Купить овёс", "Работа", TaskBucket.Backlog, BoardStatus.New, DateTimeOffset.UtcNow);
+        await store.AddAsync(target);
+        await store.AddAsync(second);
+        var rewritten = "Набрать солнечных зайцев в тарелку и поставить в холодильник.";
+        var agent = new ScopedMutationAgent($"{{\"kind\":\"update_task\",\"taskId\":null,\"reference\":null,\"title\":null,\"description\":null,\"descriptionMode\":null,\"section\":null,\"oldName\":null,\"newName\":null,\"answer\":null,\"question\":null,\"updates\":[{{\"taskId\":\"{target.Id}\",\"title\":\"Задача про коней\",\"description\":\"{rewritten}\",\"section\":\"Работа\"}}]}}");
+        var service = new TaskChatService(store, agent);
+
+        var preview = await service.HandleAsync("Ну давай тогда перепишем задачу про коней. Там не будет про коней, там будет набрать солнечных зайцев в тарелку и поставить в холодильник. Вот такое должно быть описание задачи.");
+
+        Assert.IsNotNull(preview.PendingData, preview.Reply);
+        Assert.Contains(rewritten, preview.Reply);
+        Assert.AreEqual("Старое описание", (await store.GetAsync(target.Id))!.Description);
+        var committed = await service.HandleAsync("да", pendingType: preview.PendingType, pendingData: preview.PendingData);
+        Assert.IsTrue(committed.ChangedData);
+        Assert.AreEqual(rewritten, (await store.GetAsync(target.Id))!.Description);
+
+        var batchAgent = new ScopedMutationAgent($"{{\"kind\":\"update_task\",\"answer\":null,\"updates\":[{{\"taskId\":\"{target.Id}\",\"title\":\"Зайцы\",\"description\":\"{rewritten}\",\"section\":\"Работа\"}},{{\"taskId\":\"{second.Id}\",\"title\":\"Купить овёс\",\"description\":\"Купить овёс и морковь\",\"section\":\"Работа\"}}]}}");
+        var batchService = new TaskChatService(store, batchAgent);
+        var batchPreview = await batchService.HandleAsync("Переименуй задачу про коней и дополни покупку корма");
+        Assert.IsNotNull(batchPreview.PendingData, batchPreview.Reply);
+        Assert.Contains(target.Id.ToString(), batchPreview.Reply);
+        Assert.Contains(second.Id.ToString(), batchPreview.Reply);
+        Assert.AreEqual("Задача про коней", (await store.GetAsync(target.Id))!.Title, "Batch preview must not write before approval.");
+        var batchCommitted = await batchService.HandleAsync("да", pendingType: batchPreview.PendingType, pendingData: batchPreview.PendingData);
+        Assert.IsTrue(batchCommitted.ChangedData, batchCommitted.Reply);
+        Assert.AreEqual("Зайцы", (await store.GetAsync(target.Id))!.Title);
+        Assert.AreEqual("Купить овёс и морковь", (await store.GetAsync(second.Id))!.Description);
+    }
+
+    [TestMethod]
+    public async Task NoQuestionMarkQuestionUsesModelAnswerField()
+    {
+        var store = NewStore();
+        await store.AddAsync(new TaskItem(Guid.NewGuid(), "Workflow задача", "Проверить запуск", "Workflow", TaskBucket.Backlog, BoardStatus.New, DateTimeOffset.UtcNow));
+        var agent = new ScopedMutationAgent("{\"kind\":\"answer\",\"answer\":\"В разделе Workflow есть задача «Workflow задача»: проверить запуск.\"}");
+        var service = new TaskChatService(store, agent);
+
+        var response = await service.HandleAsync("Что там у нас сейчас за задачи в workflow в разделе");
+
+        Assert.IsFalse(response.NeedsClarification, response.Reply);
+        Assert.Contains("Workflow задача", response.Reply);
+        Assert.Contains("Workflow", agent.LastSystemMessage, "The intent classifier should receive the full current task snapshot.");
+    }
+
+    [TestMethod]
+    public async Task InvalidModelIntentDoesNotFallBackToLexicalEditOrLegacyChat()
+    {
+        var store = NewStore();
+        var target = new TaskItem(Guid.NewGuid(), "Задача про коней", "Старое описание", "Работа", TaskBucket.Backlog, BoardStatus.New, DateTimeOffset.UtcNow);
+        await store.AddAsync(target);
+        var agent = new UnavailableTaskModelAgent();
+
+        var response = await new TaskChatService(store, agent).HandleAsync("Ну давай тогда перепишем задачу про коней на новое описание");
+
+        Assert.IsTrue(response.NeedsClarification, response.Reply);
+        Assert.IsFalse(response.Reply.Contains("обновлена", StringComparison.OrdinalIgnoreCase));
+        Assert.AreEqual(0, agent.LegacyChatCalls);
+        Assert.AreEqual("Старое описание", (await store.GetAsync(target.Id))!.Description);
+    }
+
+    [TestMethod]
+    public async Task QuestionFormDeleteRequestIsStillRejected()
+    {
+        var store = NewStore();
+        var target = new TaskItem(Guid.NewGuid(), "Задача про коней", "Старое описание", "Работа", TaskBucket.Backlog, BoardStatus.New, DateTimeOffset.UtcNow);
+        await store.AddAsync(target);
+
+        var response = await new TaskChatService(store, new LocalTaskAgent()).HandleAsync("Можешь её удалить?");
+
+        Assert.IsTrue(response.NeedsClarification, response.Reply);
+        Assert.AreEqual(target.Title, (await store.GetAsync(target.Id))!.Title);
+        Assert.AreEqual(1, (await store.GetAllAsync()).Count);
     }
 
     [TestMethod]
@@ -200,6 +280,19 @@ public sealed class ChatActionBoundaryTests
         public Task<string?> ResolveChatActionAsync(IReadOnlyList<TaskConversationMessage> context) { LastSystemMessage = context[0].Text; return Task.FromResult<string?>(result); }
         public Task<string> ChatAsync(string text, IReadOnlyList<TaskConversationMessage>? history = null) => Task.FromResult("ответ");
         public Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections) => Task.FromResult(new TaskDraft("Новая задача", rawText, "Общее"));
+        public Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections) => Task.FromResult(draft);
+        public Task<TaskDraft> EditDraftAsync(TaskDraft current, string instruction, IReadOnlyCollection<string> existingSections) => Task.FromResult(current);
+    }
+
+    private sealed class UnavailableTaskModelAgent : ITaskAgent, IModelSelectableTaskAgent
+    {
+        public int LegacyChatCalls { get; private set; }
+        public Task<string?> ResolveChatActionAsync(IReadOnlyList<TaskConversationMessage> context) => Task.FromResult<string?>(null);
+        public Task<string?> ResolveChatActionAsync(IReadOnlyList<TaskConversationMessage> context, bool gemmaOnly) => Task.FromResult<string?>(null);
+        public Task<string> ChatAsync(string text, IReadOnlyList<TaskConversationMessage>? history = null) { LegacyChatCalls++; return Task.FromResult("legacy mutation fallback"); }
+        public Task<string> ChatAsync(string text, IReadOnlyList<TaskConversationMessage>? history, bool gemmaOnly) { LegacyChatCalls++; return Task.FromResult("legacy mutation fallback"); }
+        public Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections) => Task.FromResult(new TaskDraft("Draft", rawText, "Общее"));
+        public Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections, bool gemmaOnly) => Task.FromResult(new TaskDraft("Draft", rawText, "Общее"));
         public Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections) => Task.FromResult(draft);
         public Task<TaskDraft> EditDraftAsync(TaskDraft current, string instruction, IReadOnlyCollection<string> existingSections) => Task.FromResult(current);
     }

@@ -11,10 +11,36 @@
   const toast = $('#toast');
   const statusLabel = { new: 'В работу', in_progress: 'Завершить', completed: 'Стикер' };
 
-  function showToast(message) {
+  function showToast(message, duration = 1800) {
     toast.textContent = message; toast.classList.remove('hidden');
-    clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.add('hidden'), 1800);
+    clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.add('hidden'), duration);
   }
+
+  const chatModelKey = 'personalDashboardChatModel';
+  const chatModelNames = { deepseek: 'DeepSeek V4 Flash 0731', gemma: 'Gemma 4 E4B' };
+  function selectedChatModel() {
+    return localStorage.getItem(chatModelKey) === 'gemma' ? 'gemma' : 'deepseek';
+  }
+  function renderChatModelToggle() {
+    const model = selectedChatModel();
+    const name = chatModelNames[model];
+    ['#chatModelToggleTasks', '#chatModelToggleKnowledge'].forEach(selector => {
+      const button = $(selector);
+      button.textContent = model === 'deepseek' ? 'D' : 'G';
+      button.setAttribute('aria-label', `Активная модель ${name}. Переключить модель`);
+      button.title = `Активная модель ${name}. Нажмите, чтобы переключить`;
+      button.setAttribute('aria-pressed', String(model === 'gemma'));
+    });
+  }
+  function toggleChatModel() {
+    const model = selectedChatModel() === 'deepseek' ? 'gemma' : 'deepseek';
+    localStorage.setItem(chatModelKey, model);
+    renderChatModelToggle();
+    showToast(`Активирована модель ${chatModelNames[model]}`, 2500);
+  }
+  renderChatModelToggle();
+  $('#chatModelToggleTasks').addEventListener('click', toggleChatModel);
+  $('#chatModelToggleKnowledge').addEventListener('click', toggleChatModel);
 
   async function api(url, options = {}) {
     const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
@@ -263,6 +289,8 @@
   async function sendChatMessage(text) {
     if (chatSending) return;
     chatSending = true;
+    const model = selectedChatModel();
+    const scope = chatScope;
     const route = parseRoute();
     appendChatBubble('user', text);
     const pendingBubble = appendChatBubble('agent');
@@ -273,8 +301,8 @@
     const pendingTimer = setInterval(() => { dotCount = dotCount % 3 + 1; pendingBubble.textContent = '.'.repeat(dotCount); }, 350);
     try {
       const data = route.sessionId
-        ? await api(`/api/${chatScope}/chat/sessions/${encodeURIComponent(route.sessionId)}/messages`, { method: 'POST', body: JSON.stringify({ text }) })
-        : await api(`/api/${chatScope}/chat/sessions`, { method: 'POST', body: JSON.stringify({ text }) });
+        ? await api(`/api/${scope}/chat/sessions/${encodeURIComponent(route.sessionId)}/messages`, { method: 'POST', body: JSON.stringify({ text, model }) })
+        : await api(`/api/${scope}/chat/sessions`, { method: 'POST', body: JSON.stringify({ text, model }) });
       const sessionId = data.session.id;
       const messages = data.session.messages || [];
       const answer = [...messages].reverse().find(message => message.role !== 'user');
@@ -282,8 +310,12 @@
       pendingBubble.classList.remove('chat-pending');
       pendingBubble.removeAttribute('aria-label');
       pendingBubble.textContent = answer?.text || 'Ответ не получен.';
+      if (data.reply?.changedData) {
+        try { await (scope === 'tasks' ? loadTasks() : loadKnowledge()); }
+        catch { showToast('Изменение сохранено, но список не обновился. Обновите страницу.'); }
+      }
       if (!route.sessionId) {
-        const sessionRoute = { main: chatScope, chat: true, sessionId };
+        const sessionRoute = { main: scope, chat: true, sessionId };
         history.replaceState(routeEntry(sessionRoute, Boolean(history.state?.entry)), '', routeHash(sessionRoute));
       }
     } catch (error) {
@@ -574,7 +606,7 @@
 
   function renderTasks() {
     const today = state.taskTab === 'today';
-    $('#pageTitle').textContent = today ? 'Сегодня' : 'Backlog';
+    $('#pageTitle').textContent = 'Задачи';
     $('#backlogTab').classList.toggle('active', !today); $('#todayTab').classList.toggle('active', today);
     $('#addForm').classList.toggle('hidden', today); $('#filters').classList.toggle('hidden', !today);
     $$('.filter').forEach(b => b.classList.toggle('active', b.dataset.filter === state.taskFilter));

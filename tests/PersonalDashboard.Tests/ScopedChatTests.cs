@@ -7,6 +7,77 @@ namespace PersonalDashboard.Tests;
 public sealed class ScopedChatTests
 {
     [TestMethod]
+    public async Task ModelIntentSupportsKnowledgeCreationAndAtomicBatchPreview()
+    {
+        var section = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "section", Title = "Здоровье" };
+        var first = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Декор", Content = "Старый декор", ParentId = section.Id };
+        var second = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Материалы", Content = "Старые материалы", ParentId = section.Id };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [section, first, second] });
+        var service = new KnowledgeBase.Api.Application.KnowledgeService(store);
+        var createRouter = new FixedKnowledgeRouter(new KnowledgeIntent("create_document", null, "Брокколи", "Источник кемпферана", "Здоровье", null));
+        var facade = new KnowledgeChatFacade(service, createRouter);
+
+        var createPreview = await facade.HandleAsync(new AC.ChatTurn("Так, добавь документ под названием Брокколи как источник кемпферана в раздел Здоровье", true, null, []), CancellationToken.None);
+        Assert.IsNotNull(createPreview.Pending, createPreview.Text);
+        Assert.Contains("Путь: Здоровье", createPreview.Text);
+        Assert.AreEqual(0, store.Writes);
+        var created = await facade.HandleAsync(new AC.ChatTurn("да", false, createPreview.Pending, []), CancellationToken.None);
+        Assert.IsTrue(created.ChangedData, created.Text);
+        Assert.IsTrue(store.Value.Nodes.Any(node => node.Title == "Брокколи" && node.Content == "Источник кемпферана" && node.ParentId == section.Id));
+
+        var sectionFacade = new KnowledgeChatFacade(service, new FixedKnowledgeRouter(new KnowledgeIntent("create_section", null, "Питание", null, null, null)));
+        var sectionPreview = await sectionFacade.HandleAsync(new AC.ChatTurn("Создай раздел Питание", true, null, []), CancellationToken.None);
+        Assert.IsNotNull(sectionPreview.Pending, sectionPreview.Text);
+        Assert.Contains("создать раздел «Питание»", sectionPreview.Text);
+        var sectionCreated = await sectionFacade.HandleAsync(new AC.ChatTurn("да", false, sectionPreview.Pending, []), CancellationToken.None);
+        Assert.IsTrue(sectionCreated.ChangedData, sectionCreated.Text);
+        Assert.IsTrue(store.Value.Nodes.Any(node => node.IsSection && node.Title == "Питание"));
+
+        var batchRouter = new FixedKnowledgeRouter(new KnowledgeIntent("batch_update", null, null, null, null, null, Operations:
+        [
+            new KnowledgeIntentOperation("append_document", "Декор", null, "Новый декор", null),
+            new KnowledgeIntentOperation("replace_document", "Материалы", null, "Новые материалы", null),
+            new KnowledgeIntentOperation("rename_section", "Здоровье", "Медицина", null, null)
+        ]));
+        var batchFacade = new KnowledgeChatFacade(service, batchRouter);
+        var batchPreview = await batchFacade.HandleAsync(new AC.ChatTurn("Допиши документ про декор и обнови материалы", true, null, []), CancellationToken.None);
+        Assert.IsNotNull(batchPreview.Pending, batchPreview.Text);
+        Assert.Contains("Будет выполнено изменений: 3", batchPreview.Text);
+        Assert.AreEqual(2, store.Writes, "Batch preview must not persist.");
+        var batchCommit = await batchFacade.HandleAsync(new AC.ChatTurn("да", false, batchPreview.Pending, []), CancellationToken.None);
+        Assert.IsTrue(batchCommit.ChangedData, batchCommit.Text);
+        Assert.AreEqual(3, store.Writes, "The batch should be committed by one store write.");
+        Assert.AreEqual("Старый декор\nНовый декор", first.Content);
+        Assert.AreEqual("Новые материалы", second.Content);
+        Assert.AreEqual("Медицина", section.Title);
+    }
+
+    [TestMethod]
+    public async Task ModelAwareKnowledgeOutageNeverFallsBackToDeterministicMutationPlanner()
+    {
+        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Декор", Content = "Исходный текст" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        var service = new KnowledgeBase.Api.Application.KnowledgeService(store);
+        var unavailable = new ModelAwareIntentResponder([("unavailable", (KnowledgeIntent?)null)]);
+        var unavailableReply = await new KnowledgeChatFacade(service, unavailable).HandleAsync(
+            new AC.ChatTurn("Добавь в документ Декор текст: Новый текст", true, null, []), CancellationToken.None);
+        Assert.Contains("DeepSeek и Gemma сейчас недоступны", unavailableReply.Text);
+        Assert.IsNull(unavailableReply.Pending);
+        Assert.AreEqual(0, unavailable.ReplyCalls);
+        Assert.AreEqual(0, store.Writes);
+        Assert.AreEqual("Исходный текст", document.Content);
+
+        var invalid = new ModelAwareIntentResponder([("ok", (KnowledgeIntent?)null)]);
+        var invalidReply = await new KnowledgeChatFacade(service, invalid).HandleAsync(
+            new AC.ChatTurn("Добавь в документ Декор текст: Новый текст", true, null, []), CancellationToken.None);
+        Assert.IsTrue(invalidReply.NeedsClarification, invalidReply.Text);
+        Assert.AreEqual("classification", KnowledgeCommandPlanner.ReadPending(invalidReply.Pending)?.Missing);
+        Assert.AreEqual(0, invalid.ReplyCalls);
+        Assert.AreEqual(0, store.Writes);
+        Assert.AreEqual("Исходный текст", document.Content);
+    }
+
+    [TestMethod]
     public async Task KnowledgeChatAndClassifiersUseOpenRouterFirstAndFallBackToOllama()
     {
         var old = new Dictionary<string, string?>
@@ -21,7 +92,7 @@ public sealed class ScopedChatTests
         };
         var replyBodies = new Queue<string>([
             "ответ Ollama",
-            "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null}",
+            "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null,\"answer\":null,\"operations\":[]}",
             "{\"decision\":\"approve\",\"confidence\":0.99}"
         ]);
         var hosts = new List<string>();
@@ -95,6 +166,86 @@ public sealed class ScopedChatTests
         Assert.AreEqual("Сессия не найдена в этой области.", crossScope.Error);
         Assert.AreEqual(1, tasks.Calls);
         Assert.AreEqual(0, knowledge.Calls);
+    }
+
+    [TestMethod]
+    public async Task ChatRejectsUnknownModelBeforeCallingScopedFacade()
+    {
+        var facade = new ProbeFacade(AC.ChatScope.Tasks);
+        var chat = new AC.ChatService(new MemoryChatStore(), [facade]);
+
+        var result = await chat.SendAsync(null, AC.ChatScope.Tasks, new AC.ChatMessageRequest("вопрос", "other-model"), CancellationToken.None);
+
+        Assert.IsNotNull(result.Error);
+        Assert.AreEqual(0, facade.Calls);
+    }
+
+    [TestMethod]
+    public async Task GemmaSelectionUsesOnlyLocalKnowledgeResponder()
+    {
+        var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        var oldUrl = Environment.GetEnvironmentVariable("OLLAMA_URL");
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", "test-only-key");
+        Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
+        var hosts = new List<string>();
+        var handler = new StubHttpHandler(request =>
+        {
+            hosts.Add(request.RequestUri!.Host);
+            var body = System.Text.Json.JsonSerializer.Serialize(new { message = new { content = "ответ Gemma" } });
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(body) };
+        });
+        try
+        {
+            var responder = new ReadOnlyChatResponder(new HttpClient(handler));
+            var selected = (IModelAwareChatResponder)responder;
+            var answer = await selected.ReplyAsync("вопрос", null, "снимок базы", AC.ChatModel.Gemma, CancellationToken.None);
+
+            Assert.AreEqual("ответ Gemma", answer);
+            CollectionAssert.AreEqual(new[] { "ollama.test" }, hosts);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", oldKey);
+            Environment.SetEnvironmentVariable("OLLAMA_URL", oldUrl);
+            handler.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public async Task UnavailableGemmaCannotFallBackToDeepSeekOrWriteKnowledge()
+    {
+        var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        var oldUrl = Environment.GetEnvironmentVariable("OLLAMA_URL");
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", "test-only-key");
+        Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
+        var hosts = new List<string>();
+        var handler = new StubHttpHandler(request =>
+        {
+            hosts.Add(request.RequestUri!.Host);
+            return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
+        });
+        try
+        {
+            var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument
+            {
+                Nodes = [new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Исходное содержание" }]
+            });
+            var responder = new ReadOnlyChatResponder(new HttpClient(handler));
+            var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), responder);
+            var chat = new AC.ChatService(new MemoryChatStore(), [facade]);
+
+            var result = await chat.SendAsync(null, AC.ChatScope.Knowledge, new AC.ChatMessageRequest("Добавь текст в Doc 4", "gemma"), CancellationToken.None);
+
+            Assert.AreEqual(0, store.Writes);
+            Assert.IsTrue(result.Reply!.Text.Contains("Модель Gemma сейчас недоступна", StringComparison.Ordinal));
+            CollectionAssert.AreEqual(new[] { "ollama.test" }, hosts);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", oldKey);
+            Environment.SetEnvironmentVariable("OLLAMA_URL", oldUrl);
+            handler.Dispose();
+        }
     }
 
     [TestMethod]
@@ -315,7 +466,7 @@ public sealed class ScopedChatTests
             if (messageContents.Any(content => content.Contains("Полный актуальный снимок", StringComparison.Ordinal)))
             { qaPayload = body; qaModel = parsed.RootElement.GetProperty("model").GetString(); }
             var isQa = qaPayload == body;
-            var content = isQa ? "Ответ по документу" : "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null}";
+            var content = "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null,\"answer\":\"Ответ по документу\",\"operations\":[]}";
             var responseBody = System.Text.Json.JsonSerializer.Serialize(new { message = new { content } });
             return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(responseBody) };
         });
@@ -363,7 +514,7 @@ public sealed class ScopedChatTests
         {
             sentPath = request.RequestUri!.AbsolutePath;
             sentBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
-            var response = new { message = new { content = "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null}" } };
+            var response = new { message = new { content = "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null,\"answer\":null,\"operations\":[]}" } };
             return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(response)) };
         });
         Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", null);
@@ -527,6 +678,27 @@ public sealed class ScopedChatTests
     private sealed class StubHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(respond(request));
+    }
+
+    private sealed class ModelAwareIntentResponder(IEnumerable<(string Status, KnowledgeIntent? Intent)> results) : AC.IChatResponder, IKnowledgeIntentRouter, IModelAwareKnowledgeIntentRouter
+    {
+        private readonly Queue<(string Status, KnowledgeIntent? Intent)> pendingResults = new(results);
+        public int ReplyCalls { get; private set; }
+        public Task<string> ReplyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, CancellationToken cancellationToken) { ReplyCalls++; return Task.FromResult("legacy answer"); }
+        private Task<(string Status, KnowledgeIntent? Intent)> Next() => Task.FromResult(pendingResults.Dequeue());
+        public Task<(string Status, KnowledgeIntent? Intent)> ClassifyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, CancellationToken cancellationToken) => Next();
+        public Task<(string Status, KnowledgeIntent? Intent)> ClassifyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, string scopedContext, CancellationToken cancellationToken) => Next();
+        public Task<(string Status, KnowledgeIntent? Intent)> ClassifyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, string scopedContext, AC.ChatModel model, CancellationToken cancellationToken) => Next();
+        public Task<(string Status, string Decision, double Confidence)> ClassifyConfirmationAsync(string preview, string answer, CancellationToken cancellationToken) => Task.FromResult(("ok", "approve", 0.99));
+        public Task<(string Status, string Decision, double Confidence)> ClassifyConfirmationAsync(string preview, string answer, AC.ChatModel model, CancellationToken cancellationToken) => Task.FromResult(("ok", "approve", 0.99));
+    }
+
+    private sealed class FixedKnowledgeRouter(KnowledgeIntent intent) : AC.IChatResponder, IKnowledgeIntentRouter
+    {
+        public Task<string> ReplyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, CancellationToken cancellationToken) => Task.FromResult("Ответ");
+        public Task<(string Status, KnowledgeIntent? Intent)> ClassifyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, CancellationToken cancellationToken) => Task.FromResult<(string, KnowledgeIntent?)>(("ok", intent));
+        public Task<(string Status, KnowledgeIntent? Intent)> ClassifyAsync(string text, IReadOnlyList<AC.ChatMessage>? history, string scopedContext, CancellationToken cancellationToken) => Task.FromResult<(string, KnowledgeIntent?)>(("ok", intent));
+        public Task<(string Status, string Decision, double Confidence)> ClassifyConfirmationAsync(string preview, string answer, CancellationToken cancellationToken) => Task.FromResult(("ok", "approve", 0.99));
     }
 
     private sealed class FixedResponder : AC.IChatResponder
