@@ -188,16 +188,24 @@ sealed class ReadOnlyChatResponder : IChatResponder, IKnowledgeIntentRouter, ISc
             using var json = JsonDocument.Parse(content);
             var root = json.RootElement;
             string[] keys = ["kind", "reference", "title", "content", "section", "question", "answer", "operations"];
-            if (root.ValueKind != JsonValueKind.Object || root.EnumerateObject().Count() != keys.Length || root.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != keys.Length || keys.Any(k => !root.TryGetProperty(k, out _))) return ("invalid", null);
-            string? Read(string name) => root.GetProperty(name).ValueKind == JsonValueKind.String ? root.GetProperty(name).GetString() : root.GetProperty(name).ValueKind == JsonValueKind.Null ? null : "!invalid!";
-            var operations = root.GetProperty("operations").ValueKind == JsonValueKind.Array
-                ? root.GetProperty("operations").EnumerateArray().Select(item => new KnowledgeIntentOperation(
+            if (root.ValueKind != JsonValueKind.Object) return ("invalid", null);
+            var properties = root.EnumerateObject().ToArray();
+            if (properties.Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != properties.Length ||
+                properties.Any(p => !keys.Contains(p.Name, StringComparer.Ordinal)) ||
+                !root.TryGetProperty("kind", out _) ||
+                !root.TryGetProperty("operations", out var operationsElement) ||
+                operationsElement.ValueKind != JsonValueKind.Array) return ("invalid", null);
+            string? Read(string name)
+            {
+                if (!root.TryGetProperty(name, out var value)) return null;
+                return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ValueKind == JsonValueKind.Null ? null : "!invalid!";
+            }
+            var operations = operationsElement.EnumerateArray().Select(item => new KnowledgeIntentOperation(
                     item.GetProperty("kind").GetString() ?? "",
                     item.GetProperty("reference").GetString(),
                     item.GetProperty("title").ValueKind == JsonValueKind.String ? item.GetProperty("title").GetString() : null,
                     item.GetProperty("content").ValueKind == JsonValueKind.String ? item.GetProperty("content").GetString() : null,
-                    item.GetProperty("section").ValueKind == JsonValueKind.String ? item.GetProperty("section").GetString() : null)).ToArray()
-                : null;
+                    item.GetProperty("section").ValueKind == JsonValueKind.String ? item.GetProperty("section").GetString() : null)).ToArray();
             var intent = new KnowledgeIntent(Read("kind") ?? "", Read("reference"), Read("title"), Read("content"), Read("section"), Read("question"), Read("answer"), operations);
             if (new[] { intent.Reference, intent.Title, intent.Content, intent.Section, intent.Question, intent.Answer }.Any(v => v == "!invalid!") ||
                 intent.Kind is not ("conversation" or "clarify" or "batch_update" or "create_document" or "create_section" or "append_document" or "replace_document" or "rename_document" or "rename_section")) return ("invalid", null);

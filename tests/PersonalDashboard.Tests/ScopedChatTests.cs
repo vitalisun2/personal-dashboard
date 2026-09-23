@@ -591,6 +591,47 @@ public sealed class ScopedChatTests
     }
 
     [TestMethod]
+    public async Task GemmaCreateDocumentIntentAllowsOmittedNullableReference()
+    {
+        var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        var oldFile = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE");
+        var oldOllama = Environment.GetEnvironmentVariable("OLLAMA_URL");
+        var oldModel = Environment.GetEnvironmentVariable("OLLAMA_CHAT_MODEL");
+        var handler = new StubHttpHandler(_ =>
+        {
+            const string content = "{\"kind\":\"create_document\",\"title\":\"Брокколи\",\"section\":\"Здоровье\",\"content\":\"Источник кемпферана\",\"question\":null,\"answer\":null,\"operations\":[]}";
+            var response = new { message = new { content } };
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(response)) };
+        });
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", null);
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", null);
+        Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
+        Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", "gemma4:e4b-it-qat");
+        try
+        {
+            var responder = new ReadOnlyChatResponder(new HttpClient(handler));
+            var result = await ((IModelAwareKnowledgeIntentRouter)responder).ClassifyAsync(
+                "Добавь документ Брокколи в раздел Здоровье", null, "Полный снимок базы знаний", AC.ChatModel.Gemma, CancellationToken.None);
+
+            Assert.AreEqual("ok", result.Status);
+            Assert.IsNotNull(result.Intent);
+            Assert.AreEqual("create_document", result.Intent.Kind);
+            Assert.IsNull(result.Intent.Reference);
+            Assert.AreEqual("Брокколи", result.Intent.Title);
+            Assert.AreEqual("Здоровье", result.Intent.Section);
+            Assert.AreEqual("Источник кемпферана", result.Intent.Content);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", oldKey);
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", oldFile);
+            Environment.SetEnvironmentVariable("OLLAMA_URL", oldOllama);
+            Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", oldModel);
+            handler.Dispose();
+        }
+    }
+
+    [TestMethod]
     public async Task GemmaConfirmationPromptIncludesExactDecisionSchema()
     {
         var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
