@@ -193,19 +193,20 @@ sealed class ReadOnlyChatResponder : IChatResponder, IKnowledgeIntentRouter, ISc
             if (properties.Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != properties.Length ||
                 properties.Any(p => !keys.Contains(p.Name, StringComparer.Ordinal)) ||
                 !root.TryGetProperty("kind", out _) ||
-                !root.TryGetProperty("operations", out var operationsElement) ||
-                operationsElement.ValueKind != JsonValueKind.Array) return ("invalid", null);
+                (root.TryGetProperty("operations", out var operationsElement) && operationsElement.ValueKind != JsonValueKind.Array)) return ("invalid", null);
             string? Read(string name)
             {
                 if (!root.TryGetProperty(name, out var value)) return null;
                 return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ValueKind == JsonValueKind.Null ? null : "!invalid!";
             }
-            var operations = operationsElement.EnumerateArray().Select(item => new KnowledgeIntentOperation(
+            var operations = root.TryGetProperty("operations", out operationsElement)
+                ? operationsElement.EnumerateArray().Select(item => new KnowledgeIntentOperation(
                     item.GetProperty("kind").GetString() ?? "",
                     item.GetProperty("reference").GetString(),
                     item.GetProperty("title").ValueKind == JsonValueKind.String ? item.GetProperty("title").GetString() : null,
                     item.GetProperty("content").ValueKind == JsonValueKind.String ? item.GetProperty("content").GetString() : null,
-                    item.GetProperty("section").ValueKind == JsonValueKind.String ? item.GetProperty("section").GetString() : null)).ToArray();
+                    item.GetProperty("section").ValueKind == JsonValueKind.String ? item.GetProperty("section").GetString() : null)).ToArray()
+                : [];
             var intent = new KnowledgeIntent(Read("kind") ?? "", Read("reference"), Read("title"), Read("content"), Read("section"), Read("question"), Read("answer"), operations);
             if (new[] { intent.Reference, intent.Title, intent.Content, intent.Section, intent.Question, intent.Answer }.Any(v => v == "!invalid!") ||
                 intent.Kind is not ("conversation" or "clarify" or "batch_update" or "create_document" or "create_section" or "append_document" or "replace_document" or "rename_document" or "rename_section")) return ("invalid", null);

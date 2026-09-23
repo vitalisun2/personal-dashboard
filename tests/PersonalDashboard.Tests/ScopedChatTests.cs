@@ -591,7 +591,7 @@ public sealed class ScopedChatTests
     }
 
     [TestMethod]
-    public async Task GemmaCreateDocumentIntentAllowsOmittedNullableReference()
+    public async Task GemmaCreateDocumentIntentAllowsOmittedOptionalFields()
     {
         var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
         var oldFile = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE");
@@ -599,7 +599,7 @@ public sealed class ScopedChatTests
         var oldModel = Environment.GetEnvironmentVariable("OLLAMA_CHAT_MODEL");
         var handler = new StubHttpHandler(_ =>
         {
-            const string content = "{\"kind\":\"create_document\",\"title\":\"Брокколи\",\"section\":\"Здоровье\",\"content\":\"Источник кемпферана\",\"question\":null,\"answer\":null,\"operations\":[]}";
+            const string content = "{\"kind\":\"create_document\",\"title\":\"Брокколи\",\"section\":\"Здоровье\",\"content\":\"Источник кемпферана\"}";
             var response = new { message = new { content } };
             return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(response)) };
         });
@@ -620,6 +620,7 @@ public sealed class ScopedChatTests
             Assert.AreEqual("Брокколи", result.Intent.Title);
             Assert.AreEqual("Здоровье", result.Intent.Section);
             Assert.AreEqual("Источник кемпферана", result.Intent.Content);
+            Assert.IsEmpty(result.Intent.Operations!);
         }
         finally
         {
