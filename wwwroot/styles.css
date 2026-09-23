@@ -122,8 +122,13 @@
 .detail-status{width:auto}
 .version-toggle{display:inline-flex;align-items:center;justify-content:center;min-width:34px;min-height:34px;border:1px solid var(--border);border-radius:8px;background:var(--card);font-size:20px;line-height:1}
 .detail-actions .version-toggle{padding:0;font-size:20px}
+.detail-actions{gap:12px}
+.detail-actions .version-toggle{min-width:50px;min-height:40px}
 .version-toggle:hover,.version-toggle:focus-visible{background:var(--accent-soft);border-color:var(--accent);outline:0}
 .version-toggle:disabled{opacity:.55;cursor:wait}
 .knowledge-version-actions{display:flex;justify-content:flex-start;margin-top:12px}
 .knowledge-version-actions .version-toggle{min-width:42px;min-height:38px}
+.chat-view .chat-approve{display:block;width:100%;min-height:44px;margin-top:12px;font-size:15px}
+.chat-view .chat-form{margin-top:10px}
+.chat-view .chat-form input{width:100%}
 .drag-leaf-icon{width:20px;height:20px;display:block;pointer-events:none}

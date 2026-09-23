@@ -9,6 +9,49 @@ public sealed class ChatActionBoundaryTests
     private static TaskStore NewStore() => new(Path.Combine(Path.GetTempPath(), "dashboard-chat-" + Guid.NewGuid() + ".json"));
 
     [TestMethod]
+    public async Task TaskPreviewCanBeRevisedAndQuestionedWithoutWriting()
+    {
+        var store = NewStore();
+        var agent = new SequenceMutationAgent(
+            "{\"kind\":\"create_task\",\"title\":\"Проверить релиз\",\"description\":\"Старый текст\",\"section\":\"Работа\"}",
+            "{\"kind\":\"revise_preview\",\"title\":\"Проверить запуск\",\"description\":\"Новый полный текст\",\"section\":\"Личное\"}",
+            "{\"kind\":\"answer\",\"answer\":\"В задачнике пока пусто.\"}");
+        var service = new TaskChatService(store, agent);
+        var preview = await service.HandleAsync("Создай задачу проверить релиз");
+        Assert.IsNotNull(preview.PendingData);
+        Assert.AreEqual(0, (await store.GetAllAsync()).Count);
+        var revised = await service.HandleAsync("Нет, лучше другой заголовок, описание и раздел", pendingType: preview.PendingType, pendingData: preview.PendingData);
+        Assert.Contains("Проверить запуск", revised.Reply);
+        Assert.Contains("Новый полный текст", revised.Reply);
+        Assert.AreEqual(0, (await store.GetAllAsync()).Count);
+        var question = await service.HandleAsync("Какие задачи уже есть?", pendingType: revised.PendingType, pendingData: revised.PendingData);
+        Assert.Contains("пока пусто", question.Reply);
+        Assert.IsNotNull(question.PendingData);
+        Assert.AreEqual(0, (await store.GetAllAsync()).Count);
+        var committed = await service.HandleAsync("да", pendingType: question.PendingType, pendingData: question.PendingData);
+        Assert.IsNotNull(committed.Task);
+        Assert.IsTrue((await store.GetAllAsync()).Any(task => task.Title == "Проверить запуск" && task.Description == "Новый полный текст" && task.Section == "Личное"));
+    }
+
+    [TestMethod]
+    public async Task NewTaskActionSupersedesEarlierPreview()
+    {
+        var store = NewStore();
+        var agent = new SequenceMutationAgent(
+            "{\"kind\":\"create_task\",\"title\":\"Старый черновик\",\"description\":\"Старое описание\",\"section\":\"Работа\"}",
+            "{\"kind\":\"create_task\",\"title\":\"Новая задача\",\"description\":\"Новое описание\",\"section\":\"Личное\"}");
+        var service = new TaskChatService(store, agent);
+        var first = await service.HandleAsync("Создай задачу про релиз");
+        var second = await service.HandleAsync("Вместо этого создай другую задачу", pendingType: first.PendingType, pendingData: first.PendingData);
+        Assert.Contains("Новая задача", second.Reply);
+        Assert.AreEqual(0, (await store.GetAllAsync()).Count);
+        var committed = await service.HandleAsync("да", pendingType: second.PendingType, pendingData: second.PendingData);
+        Assert.IsNotNull(committed.Task);
+        Assert.IsTrue((await store.GetAllAsync()).Any(task => task.Title == "Новая задача"));
+        Assert.IsFalse((await store.GetAllAsync()).Any(task => task.Title == "Старый черновик"));
+    }
+
+    [TestMethod]
     public async Task OrdinaryMessageRepliesWithoutMutation()
     {
         var store = NewStore();
@@ -22,7 +65,11 @@ public sealed class ChatActionBoundaryTests
     public async Task CreateTaskUsesGatewayAndStatusRequestHasNoSideEffect()
     {
         var store = NewStore();
-        var created = await ChatRoutes.HandleAsync("Создай задачу: проверить резервные копии", store, new LocalTaskAgent());
+        var service = new TaskChatService(store, new LocalTaskAgent());
+        var preview = await service.HandleAsync("Создай задачу: проверить резервные копии");
+        Assert.AreEqual(0, (await store.GetAllAsync()).Count);
+        Assert.IsNotNull(preview.PendingData);
+        var created = await service.HandleAsync("да", pendingType: preview.PendingType, pendingData: preview.PendingData);
         Assert.IsNotNull(created.Task);
         Assert.AreEqual(TaskBucket.Backlog, created.Task!.Bucket);
 
@@ -174,7 +221,7 @@ public sealed class ChatActionBoundaryTests
 
         var response = await new TaskChatService(store, agent).HandleAsync("Ну давай тогда перепишем задачу про коней на новое описание");
 
-        Assert.IsTrue(response.NeedsClarification, response.Reply);
+        Assert.IsFalse(response.ChangedData, response.Reply);
         Assert.IsFalse(response.Reply.Contains("обновлена", StringComparison.OrdinalIgnoreCase));
         Assert.AreEqual(0, agent.LegacyChatCalls);
         Assert.AreEqual("Старое описание", (await store.GetAsync(target.Id))!.Description);
@@ -189,7 +236,7 @@ public sealed class ChatActionBoundaryTests
 
         var response = await new TaskChatService(store, new LocalTaskAgent()).HandleAsync("Можешь её удалить?");
 
-        Assert.IsTrue(response.NeedsClarification, response.Reply);
+        Assert.IsFalse(response.ChangedData, response.Reply);
         Assert.AreEqual(target.Title, (await store.GetAsync(target.Id))!.Title);
         Assert.AreEqual(1, (await store.GetAllAsync()).Count);
     }
@@ -202,7 +249,7 @@ public sealed class ChatActionBoundaryTests
         await store.AddAsync(task);
         var taskService = new TaskChatService(store, new LocalTaskAgent());
         var move = await taskService.HandleAsync($"Перенеси задачу {task.Id} в раздел Общее");
-        Assert.IsTrue(move.NeedsClarification);
+        Assert.IsFalse(move.ChangedData);
         Assert.AreEqual("Личный дашборд", (await store.GetAsync(task.Id))!.Section);
 
         var staleAgent = new ScopedMutationAgent($"{{\"kind\":\"update_task\",\"taskId\":\"{task.Id}\",\"reference\":\"Подготовить релиз\",\"title\":\"Подготовить релиз\",\"description\":\"Проверить сборку и скриншоты\",\"descriptionMode\":\"append\",\"section\":\"Личный дашборд\"}}");
@@ -282,6 +329,16 @@ public sealed class ChatActionBoundaryTests
         public Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections) => Task.FromResult(new TaskDraft("Новая задача", rawText, "Общее"));
         public Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections) => Task.FromResult(draft);
         public Task<TaskDraft> EditDraftAsync(TaskDraft current, string instruction, IReadOnlyCollection<string> existingSections) => Task.FromResult(current);
+    }
+
+    private sealed class SequenceMutationAgent(params string[] results) : ITaskAgent
+    {
+        private readonly Queue<string> remaining = new(results);
+        public Task<string?> ResolveChatActionAsync(IReadOnlyList<TaskConversationMessage> context) => Task.FromResult<string?>(remaining.Dequeue());
+        public Task<string> ChatAsync(string text, IReadOnlyList<TaskConversationMessage>? history = null) => Task.FromResult("ответ");
+        public Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections) => throw new InvalidOperationException("The model intent should provide the task draft.");
+        public Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections) => throw new NotImplementedException();
+        public Task<TaskDraft> EditDraftAsync(TaskDraft current, string instruction, IReadOnlyCollection<string> existingSections) => throw new NotImplementedException();
     }
 
     private sealed class UnavailableTaskModelAgent : ITaskAgent, IModelSelectableTaskAgent

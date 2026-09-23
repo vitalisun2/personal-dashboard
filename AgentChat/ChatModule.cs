@@ -34,6 +34,7 @@ public interface IChatSessionStore
     Task<ChatSession> CreateAsync(ChatScope scope, string? initialText, CancellationToken cancellationToken);
     Task<ChatSession?> AppendAsync(Guid id, params ChatMessage[] messages);
     Task<ChatSession?> SetPendingAsync(Guid id, ChatPending? pending, CancellationToken cancellationToken);
+    Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult(false);
 }
 
 /// <summary>Short-lived conversations exist only in this process and expire after inactivity.</summary>
@@ -60,6 +61,9 @@ public sealed class EphemeralChatSessionStore : IChatSessionStore
     public async Task<ChatSession?> SetPendingAsync(Guid id, ChatPending? pending, CancellationToken ct)
     { await _gate.WaitAsync(ct); try { var current = GetActiveUnsafe(id); if (current is null) return null; var updated = current with { Pending = pending, UpdatedAt = DateTimeOffset.UtcNow }; _sessions[id] = updated; return updated; } finally { _gate.Release(); } }
 
+    public async Task<bool> DeleteAsync(Guid id, CancellationToken ct)
+    { await _gate.WaitAsync(ct); try { return _sessions.Remove(id); } finally { _gate.Release(); } }
+
     private ChatSession? GetActiveUnsafe(Guid id)
     {
         if (!_sessions.TryGetValue(id, out var session)) return null;
@@ -79,6 +83,8 @@ public sealed class ChatService(IChatSessionStore sessions, IEnumerable<IChatCom
     private readonly IReadOnlyDictionary<ChatScope, IChatCommandFacade> _facades = facades.ToDictionary(x => x.Scope);
 
     public Task<ChatSession?> GetAsync(Guid id, ChatScope scope, CancellationToken ct) => GetScopedAsync(id, scope, ct);
+    public async Task<bool> DeleteAsync(Guid id, ChatScope scope, CancellationToken ct)
+    { var session = await GetScopedAsync(id, scope, ct); return session is not null && await sessions.DeleteAsync(id, ct); }
     private async Task<ChatSession?> GetScopedAsync(Guid id, ChatScope scope, CancellationToken ct)
     { var session = await sessions.GetAsync(id, ct); return session is { Scope: var actual } && actual == scope ? session : null; }
 
@@ -126,6 +132,8 @@ public static class ChatModuleExtensions
             ToResult(await service.SendAsync(null, scope, request, ct)));
         app.MapGet($"/api/{route}/chat/sessions/{{id:guid}}", async (Guid id, ChatService service, CancellationToken ct) =>
             (await service.GetAsync(id, scope, ct)) is { } session ? Results.Ok(session) : Results.NotFound());
+        app.MapDelete($"/api/{route}/chat/sessions/{{id:guid}}", async (Guid id, ChatService service, CancellationToken ct) =>
+            await service.DeleteAsync(id, scope, ct) ? Results.NoContent() : Results.NotFound());
         app.MapPost($"/api/{route}/chat/sessions/{{id:guid}}/messages", async (Guid id, ChatMessageRequest request, ChatService service, CancellationToken ct) =>
             ToResult(await service.SendAsync(id, scope, request, ct)));
     }

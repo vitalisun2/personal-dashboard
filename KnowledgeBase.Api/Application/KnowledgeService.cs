@@ -272,6 +272,32 @@ public sealed class KnowledgeService(IKnowledgeStore store)
         finally { mutationGate.Release(); }
     }
 
+    public async Task<string?> UpdateDocumentIfCurrentAsync(Guid id, string expectedTitle, string expectedContent, string title, string content, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return "Название документа обязательно.";
+        await mutationGate.WaitAsync(ct);
+        try
+        {
+            var data = await store.ReadAsync(ct);
+            var node = data.Nodes.FirstOrDefault(n => n.Id == id && !n.IsSection);
+            if (node is null) return "Документ не найден.";
+            if (node.Title != expectedTitle || (node.Content ?? "") != expectedContent)
+                return "Документ изменился после предпросмотра. Запись не выполнена; повторите запрос.";
+            var cleanTitle = title.Trim();
+            if (data.Nodes.Any(other => other.Id != id && !other.IsSection && other.ParentId == node.ParentId && other.Title.Equals(cleanTitle, StringComparison.OrdinalIgnoreCase)))
+                return "В этом разделе уже есть документ с таким названием.";
+            var oldTitle = node.Title;
+            var oldContent = node.Content ?? "";
+            node.Title = cleanTitle;
+            node.Content = content;
+            CaptureDocumentEdit(node, oldTitle, oldContent);
+            node.UpdatedAt = DateTimeOffset.UtcNow;
+            await store.WriteAsync(data, ct);
+            return null;
+        }
+        finally { mutationGate.Release(); }
+    }
+
     public async Task<string?> MoveAsync(Guid id, Guid? parentId, int order, CancellationToken ct)
     {
         await mutationGate.WaitAsync(ct);

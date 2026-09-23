@@ -7,7 +7,94 @@ namespace PersonalDashboard.Tests;
 public sealed class ScopedChatTests
 {
     [TestMethod]
-    public async Task ExplicitDocumentDestinationOverridesMissingOrMismatchedModelSection()
+    public async Task SoftLaunchDestinationComesFromModelAndNeedsApproval()
+    {
+        var section = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "section", Title = "Soft Launch" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [section] });
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store),
+            new FixedKnowledgeRouter(new KnowledgeIntent("create_document", null, "Астронавты летят ввысь", "", "Soft Launch", null)));
+
+        var preview = await facade.HandleAsync(new AC.ChatTurn("добавь новый документ, создай его в разделе Soft Launch, назови его Астронавты летят ввысь", true, null, []), CancellationToken.None);
+
+        Assert.Contains("Путь: Soft Launch", preview.Text);
+        Assert.AreEqual(section.Id, KnowledgeCommandPlanner.ReadPending(preview.Pending)?.ParentId);
+        Assert.AreEqual(0, store.Writes);
+        var approved = await facade.HandleAsync(new AC.ChatTurn("да", false, preview.Pending, []), CancellationToken.None);
+        Assert.IsTrue(approved.ChangedData);
+        Assert.IsTrue(store.Value.Nodes.Any(node => node.Title == "Астронавты летят ввысь" && node.ParentId == section.Id));
+    }
+
+    [TestMethod]
+    public async Task PendingDocumentCanBeCorrectedAndQuestionedBeforeApproval()
+    {
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [] });
+        var responder = new ModelAwareIntentResponder([
+            ("ok", new KnowledgeIntent("create_document", null, "Морковь", "Морковь — полезный продукт.", "Здоровье", null)),
+            ("ok", new KnowledgeIntent("revise_preview", null, "Морковь на подоконнике", "Морковь прорастает на лугах.", "Питание", null)),
+            ("ok", new KnowledgeIntent("conversation", null, null, null, null, null, "В базе пока нет документов о моркови."))
+        ]);
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), responder);
+        var preview = await facade.HandleAsync(new AC.ChatTurn("Добавь документ про морковь в Здоровье", true, null, []), CancellationToken.None);
+        var revised = await facade.HandleAsync(new AC.ChatTurn("Нет, лучше назови Морковь на подоконнике, раздел Питание и напиши, что морковь прорастает на лугах", false, preview.Pending, []), CancellationToken.None);
+        Assert.IsNotNull(revised.Pending);
+        Assert.Contains("Морковь прорастает на лугах", revised.Text);
+        Assert.Contains("Питание", revised.Text);
+        Assert.AreEqual(0, store.Writes);
+        var question = await facade.HandleAsync(new AC.ChatTurn("А есть ли уже что-то про морковь?", false, revised.Pending, []), CancellationToken.None);
+        Assert.Contains("пока нет", question.Text);
+        Assert.IsNotNull(question.Pending);
+        Assert.AreEqual(0, store.Writes);
+        var committed = await facade.HandleAsync(new AC.ChatTurn("да", false, question.Pending, []), CancellationToken.None);
+        Assert.IsTrue(committed.ChangedData, committed.Text);
+        var section = store.Value.Nodes.Single(node => node.Kind == "section" && node.Title == "Питание");
+        Assert.IsTrue(store.Value.Nodes.Any(node => node.Title == "Морковь на подоконнике" && node.Content == "Морковь прорастает на лугах." && node.ParentId == section.Id));
+    }
+
+    [TestMethod]
+    public async Task NewActionSupersedesPendingDocument()
+    {
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [] });
+        var responder = new ModelAwareIntentResponder([
+            ("ok", new KnowledgeIntent("create_document", null, "Морковь", "Текст", "Здоровье", null)),
+            ("ok", new KnowledgeIntent("create_section", null, "Спорт", null, null, null))
+        ]);
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), responder);
+        var first = await facade.HandleAsync(new AC.ChatTurn("Создай документ про морковь", true, null, []), CancellationToken.None);
+        var second = await facade.HandleAsync(new AC.ChatTurn("Лучше создай раздел Спорт", false, first.Pending, []), CancellationToken.None);
+        Assert.Contains("создать раздел «Спорт»", second.Text);
+        Assert.AreEqual(0, store.Writes);
+        var committed = await facade.HandleAsync(new AC.ChatTurn("да", false, second.Pending, []), CancellationToken.None);
+        Assert.IsTrue(committed.ChangedData);
+        Assert.IsTrue(store.Value.Nodes.Any(node => node.Kind == "section" && node.Title == "Спорт"));
+        Assert.IsFalse(store.Value.Nodes.Any(node => node.Title == "Морковь"));
+    }
+
+    [TestMethod]
+    public async Task ExistingDocumentTitleAndContentCorrectionCommitsAtomically()
+    {
+        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Памятка", Content = "Старый текст" };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        var responder = new ModelAwareIntentResponder([
+            ("ok", new KnowledgeIntent("replace_document", "Памятка", null, "Первый вариант", null, null)),
+            ("ok", new KnowledgeIntent("revise_preview", null, "Новая памятка", "Итоговый текст", null, null))
+        ]);
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), responder);
+        var preview = await facade.HandleAsync(new AC.ChatTurn("Измени памятку", true, null, []), CancellationToken.None);
+        var corrected = await facade.HandleAsync(new AC.ChatTurn("Назови Новая памятка и замени текст на Итоговый текст", false, preview.Pending, []), CancellationToken.None);
+        Assert.Contains("Новая памятка", corrected.Text);
+        Assert.Contains("Итоговый текст", corrected.Text);
+        Assert.AreEqual(0, store.Writes);
+        var committed = await facade.HandleAsync(new AC.ChatTurn("да", false, corrected.Pending, []), CancellationToken.None);
+        Assert.IsTrue(committed.ChangedData, committed.Text);
+        Assert.AreEqual(1, store.Writes);
+        Assert.AreEqual("Новая памятка", document.Title);
+        Assert.AreEqual("Итоговый текст", document.Content);
+        Assert.AreEqual("Памятка", document.PreviousVersion?.Title);
+        Assert.AreEqual("Старый текст", document.PreviousVersion?.Content);
+    }
+
+    [TestMethod]
+    public async Task ModelChoosesDocumentDestinationWithoutStringOverride()
     {
         const string request = "Добавь документ под названием Broccoli как источник с юмрофана в раздел Здоровье";
         foreach (var modelSection in new string?[] { null, "Работа" })
@@ -21,16 +108,15 @@ public sealed class ScopedChatTests
             var preview = await facade.HandleAsync(new AC.ChatTurn(request, true, null, []), CancellationToken.None);
 
             Assert.IsNotNull(preview.Pending, preview.Text);
-            Assert.Contains("Путь: Здоровье", preview.Text);
-            Assert.IsFalse(preview.Text.Contains("Путь: Корень базы знаний", StringComparison.Ordinal));
-            Assert.AreEqual("Здоровье", KnowledgeCommandPlanner.ReadPending(preview.Pending)?.SectionTitle);
-            Assert.AreEqual(health.Id, KnowledgeCommandPlanner.ReadPending(preview.Pending)?.ParentId);
+            var expectedPath = modelSection ?? "Корень базы знаний";
+            Assert.Contains("Путь: " + expectedPath, preview.Text);
+            Assert.AreEqual(modelSection, KnowledgeCommandPlanner.ReadPending(preview.Pending)?.SectionTitle);
+            Assert.AreEqual(modelSection is null ? null : work.Id, KnowledgeCommandPlanner.ReadPending(preview.Pending)?.ParentId);
             Assert.AreEqual(0, store.Writes, "Preview must not write data.");
 
             var committed = await facade.HandleAsync(new AC.ChatTurn("да", false, preview.Pending, []), CancellationToken.None);
             Assert.IsTrue(committed.ChangedData, committed.Text);
-            Assert.IsTrue(store.Value.Nodes.Any(node => node.Title == "Broccoli" && node.ParentId == health.Id));
-            Assert.IsFalse(store.Value.Nodes.Any(node => node.Title == "Broccoli" && node.ParentId == work.Id));
+            Assert.IsTrue(store.Value.Nodes.Any(node => node.Title == "Broccoli" && node.ParentId == (modelSection is null ? null : work.Id)));
         }
     }
 
@@ -39,7 +125,7 @@ public sealed class ScopedChatTests
     {
         var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [] });
         var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store),
-            new FixedKnowledgeRouter(new KnowledgeIntent("create_document", null, "Broccoli", "Источник с юмрофана", null, null)));
+            new FixedKnowledgeRouter(new KnowledgeIntent("create_document", null, "Broccoli", "Источник с юмрофана", "Здоровье", null)));
 
         var preview = await facade.HandleAsync(new AC.ChatTurn("Добавь документ под названием Broccoli как источник с юмрофана в раздел Здоровье", true, null, []), CancellationToken.None);
 
@@ -56,11 +142,11 @@ public sealed class ScopedChatTests
     }
 
     [TestMethod]
-    public async Task AmbiguousExplicitDestinationAsksForSectionInsteadOfPreviewingRoot()
+    public async Task ModelClarificationDoesNotCreateRootDocument()
     {
         var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [] });
         var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store),
-            new FixedKnowledgeRouter(new KnowledgeIntent("create_document", null, "Broccoli", "Источник с юмрофана", null, null)));
+            new FixedKnowledgeRouter(new KnowledgeIntent("clarify", null, null, null, null, "Уточните раздел.")));
 
         foreach (var request in new[]
         {
@@ -71,8 +157,8 @@ public sealed class ScopedChatTests
             var reply = await facade.HandleAsync(new AC.ChatTurn(request, true, null, []), CancellationToken.None);
 
             Assert.IsTrue(reply.NeedsClarification, reply.Text);
-            Assert.Contains("Уточните точное название раздела", reply.Text);
-            Assert.AreEqual("section", KnowledgeCommandPlanner.ReadPending(reply.Pending)?.Missing);
+            Assert.Contains("Уточните раздел", reply.Text);
+            Assert.AreEqual("classification", KnowledgeCommandPlanner.ReadPending(reply.Pending)?.Missing);
             Assert.IsNull(KnowledgeCommandPlanner.ReadPending(reply.Pending)?.SectionTitle);
             Assert.AreEqual(0, store.Writes);
         }
@@ -101,7 +187,7 @@ public sealed class ScopedChatTests
         var reply = await facade.HandleAsync(new AC.ChatTurn("Создай документ в раздел", true, null, []), CancellationToken.None);
 
         Assert.IsTrue(reply.NeedsClarification);
-        Assert.AreEqual("classification", KnowledgeCommandPlanner.ReadPending(reply.Pending)?.Missing);
+        Assert.AreEqual("title", KnowledgeCommandPlanner.ReadPending(reply.Pending)?.Missing);
         Assert.AreEqual(0, store.Writes);
     }
 
@@ -358,6 +444,18 @@ public sealed class ScopedChatTests
     }
 
     [TestMethod]
+    public async Task LeavingChatCanDeleteOnlyItsScopedEphemeralSession()
+    {
+        var sessions = new AC.EphemeralChatSessionStore();
+        var chat = new AC.ChatService(sessions, [new ProbeFacade(AC.ChatScope.Tasks), new ProbeFacade(AC.ChatScope.Knowledge)]);
+        var knowledge = await sessions.CreateAsync(AC.ChatScope.Knowledge, null, CancellationToken.None);
+        Assert.IsFalse(await chat.DeleteAsync(knowledge.Id, AC.ChatScope.Tasks, CancellationToken.None));
+        Assert.IsNotNull(await chat.GetAsync(knowledge.Id, AC.ChatScope.Knowledge, CancellationToken.None));
+        Assert.IsTrue(await chat.DeleteAsync(knowledge.Id, AC.ChatScope.Knowledge, CancellationToken.None));
+        Assert.IsNull(await chat.GetAsync(knowledge.Id, AC.ChatScope.Knowledge, CancellationToken.None));
+    }
+
+    [TestMethod]
     public void KnowledgePlannerSeparatesTitleContentAndSection()
     {
         var plan = KnowledgeCommandPlanner.Plan("Создай документ План с содержанием Текст в разделе Работа");
@@ -458,9 +556,9 @@ public sealed class ScopedChatTests
 
         var unclear = await facade.HandleAsync(new AC.ChatTurn("А что сейчас записано?", false, preview.Pending, []), CancellationToken.None);
 
-        Assert.IsTrue(unclear.NeedsClarification);
+        Assert.IsFalse(unclear.NeedsClarification);
         Assert.IsNotNull(unclear.Pending);
-        Assert.Contains("Предпросмотр", unclear.Text);
+        Assert.Contains("ответ модели", unclear.Text);
         Assert.AreEqual("Исходный текст", document.Content);
         Assert.AreEqual(0, store.Writes);
 
@@ -495,7 +593,7 @@ public sealed class ScopedChatTests
     }
 
     [TestMethod]
-    public async Task FreeFormPositiveConfirmationCommitsWhenRouterIsConfident()
+    public async Task FreeFormReplyDoesNotCommitWithoutExplicitApproval()
     {
         var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Исходный текст" };
         var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
@@ -505,10 +603,10 @@ public sealed class ScopedChatTests
 
         var result = await facade.HandleAsync(new AC.ChatTurn("Да, этот вариант меня устраивает, применяй", false, preview.Pending, []), CancellationToken.None);
 
-        Assert.IsTrue(result.ChangedData, result.Text);
-        Assert.AreEqual("Исходный текст" + Environment.NewLine + "Новый текст", document.Content);
-        Assert.AreEqual(1, store.Writes);
-        Assert.Contains("Документ: «Doc 4»", responder.LastPreview);
+        Assert.IsFalse(result.ChangedData, result.Text);
+        Assert.IsNotNull(result.Pending);
+        Assert.AreEqual("Исходный текст", document.Content);
+        Assert.AreEqual(0, store.Writes);
     }
 
     [TestMethod]
@@ -523,7 +621,7 @@ public sealed class ScopedChatTests
         var result = await facade.HandleAsync(new AC.ChatTurn("Я передумал, оставь документ как был", false, preview.Pending, []), CancellationToken.None);
 
         Assert.IsFalse(result.ChangedData);
-        Assert.IsNull(result.Pending);
+        Assert.IsNotNull(result.Pending);
         Assert.AreEqual("Исходный текст", document.Content);
         Assert.AreEqual(0, store.Writes);
     }

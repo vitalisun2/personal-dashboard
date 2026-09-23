@@ -201,7 +201,15 @@
     else navigate(fallbackRoute, { replace: true });
   }
 
+  let activeChatSession = null;
+  let chatRouteEpoch = 0;
   function applyRoute(route) {
+    chatRouteEpoch++;
+    if (activeChatSession && (!route.chat || route.main !== activeChatSession.scope || route.sessionId !== activeChatSession.id)) {
+      const leaving = activeChatSession;
+      activeChatSession = null;
+      fetch(`/api/${leaving.scope}/chat/sessions/${encodeURIComponent(leaving.id)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+    }
     $('#chatView').classList.toggle('hidden', !route.chat);
     if (route.chat) {
       setMain(route.main);
@@ -244,14 +252,35 @@
   async function loadChat(scope, sessionId) {
     chatScope = scope || 'tasks';
     if (!sessionId) { renderChat({ messages: [] }); requestAnimationFrame(() => $('#chatInput').focus()); return; }
-    const data = await api(`/api/${chatScope}/chat/sessions/${encodeURIComponent(sessionId)}`);
+    const routeEpoch = chatRouteEpoch;
+    let data;
+    try { data = await api(`/api/${chatScope}/chat/sessions/${encodeURIComponent(sessionId)}`); }
+    catch { if (chatRouteEpoch === routeEpoch) navigate({ main: chatScope, chat: true, sessionId: null }, { replace: true }); return; }
+    if (chatRouteEpoch !== routeEpoch) {
+      fetch(`/api/${chatScope}/chat/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+      return;
+    }
+    activeChatSession = { scope: chatScope, id: sessionId };
     renderChat(data);
     $('#chatInput').focus();
+  }
+  function hasApprovalPending(session) {
+    const pending = session?.pending;
+    if (!pending) return false;
+    if (pending.kind === 'tasks-chat') {
+      try { return ['create_task', 'update', 'rename_section'].includes(JSON.parse(pending.data)?.Kind); } catch { return false; }
+    }
+    if (pending.kind !== 'knowledge-command') return false;
+    try { return JSON.parse(pending.data)?.Missing === 'approval'; } catch { return false; }
+  }
+  function showChatApproval(session) {
+    $('#chatApprove').classList.toggle('hidden', !hasApprovalPending(session));
   }
   function renderChat(data) {
     const box = $('#chatMessages'); box.textContent = '';
     (data.messages || []).forEach(message => { const bubble = document.createElement('div'); bubble.className = `chat-bubble ${message.role === 'user' ? 'chat-user' : 'chat-agent'}`; bubble.textContent = message.text; box.append(bubble); });
     box.scrollTop = box.scrollHeight;
+    showChatApproval(data);
   }
 
   function appendChatBubble(role, text = '') {
@@ -292,6 +321,7 @@
     const model = selectedChatModel();
     const scope = chatScope;
     const route = parseRoute();
+    const routeEpoch = chatRouteEpoch;
     appendChatBubble('user', text);
     const pendingBubble = appendChatBubble('agent');
     pendingBubble.classList.add('chat-pending');
@@ -304,12 +334,19 @@
         ? await api(`/api/${scope}/chat/sessions/${encodeURIComponent(route.sessionId)}/messages`, { method: 'POST', body: JSON.stringify({ text, model }) })
         : await api(`/api/${scope}/chat/sessions`, { method: 'POST', body: JSON.stringify({ text, model }) });
       const sessionId = data.session.id;
+      if (chatRouteEpoch !== routeEpoch || !parseRoute().chat || parseRoute().main !== scope) {
+        clearInterval(pendingTimer);
+        fetch(`/api/${scope}/chat/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+        return;
+      }
       const messages = data.session.messages || [];
       const answer = [...messages].reverse().find(message => message.role !== 'user');
       clearInterval(pendingTimer);
       pendingBubble.classList.remove('chat-pending');
       pendingBubble.removeAttribute('aria-label');
       pendingBubble.textContent = answer?.text || 'Ответ не получен.';
+      activeChatSession = { scope, id: sessionId };
+      showChatApproval(data.session);
       if (data.reply?.changedData) {
         try { await (scope === 'tasks' ? loadTasks() : loadKnowledge()); }
         catch { showToast('Изменение сохранено, но список не обновился. Обновите страницу.'); }
@@ -1389,6 +1426,8 @@
   $('#addForm').addEventListener('submit',async e=>{e.preventDefault();if(chatSending)return;const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();navigate({main:'tasks',chat:true,sessionId:null},{replace:false});if(!text)return;btn.disabled=true;btn.classList.add('sending');try{$('#taskInput').value='';await sendChatMessage(text);}catch(err){showToast(err.message);navigate({main:'tasks',taskTab:'backlog',filter:'all'},{replace:true});}finally{btn.disabled=false;btn.classList.remove('sending');}});
   $('#knowledgeChatForm').addEventListener('submit',async e=>{e.preventDefault();if(chatSending)return;const input=$('#knowledgeChatInput');const text=input.value.trim();input.value='';navigate({main:'knowledge',chat:true,sessionId:null},{replace:false});if(text)try{await sendChatMessage(text);}catch(err){showToast(err.message);}});
   $('#chatForm').addEventListener('submit',async e=>{e.preventDefault();if(chatSending)return;const input=$('#chatInput');const text=input.value.trim();if(!text)return;input.value='';try{await sendChatMessage(text);}catch(err){showToast(err.message);}});
+  $('#chatInput').addEventListener('keydown',e=>{if(e.key!=='Enter'||e.isComposing||e.keyCode===229)return;e.preventDefault();$('#chatForm').requestSubmit();});
+  $('#chatApprove').addEventListener('click',async()=>{if(chatSending)return;$('#chatApprove').disabled=true;try{await sendChatMessage('да');}catch(err){showToast(err.message);}finally{$('#chatApprove').disabled=false;}});
   $('#chatBackButton').addEventListener('click',()=>navigate(chatScope==='tasks'?{main:'tasks',taskTab:'backlog',filter:'all'}:{main:'knowledge'}));
   $('#taskDraftForm').addEventListener('submit', e => { e.preventDefault(); reviseTaskDraft(); });
   $('#taskDraftConfirm').addEventListener('click', confirmTaskDraft);
