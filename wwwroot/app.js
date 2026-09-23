@@ -493,7 +493,20 @@
     button.title = label;
   }
 
-  function renderKnowledgeTree(){const box=$('#knowledgeTree');box.replaceChildren();const render=(nodes,parent,depth=0)=>nodes.forEach(n=>{const row=document.createElement('div');row.className='knowledge-row';row.dataset.knowledgeId=n.id;row.dataset.knowledgeParent=parent||'';row.style.setProperty('--knowledge-depth',depth);const handle=document.createElement('button');handle.className='knowledge-drag-handle';handle.type='button';handle.setAttribute('aria-label','Перетащить');handle.textContent='☰';row.append(handle);const title=document.createElement('button');title.type='button';title.className='knowledge-node-title '+n.kind;title.textContent=n.title;row.append(title);if(n.kind==='section'){const actions=document.createElement('span');actions.className='knowledge-inline-actions';const addDoc=document.createElement('button');addDoc.type='button';addDoc.textContent='+ MD';addDoc.dataset.knowledgeAddDoc=n.id;const addSection=document.createElement('button');addSection.type='button';addSection.textContent='+ раздел';addSection.dataset.knowledgeAddSection=n.id;actions.append(addDoc,addSection);row.append(actions);}box.append(row);if(n.kind==='section'&&state.knowledgeExpanded.has(n.id))render(n.children||[],n.id,depth+1);});render(state.knowledge,null);const root=document.createElement('div');root.className='knowledge-root-drop';root.dataset.knowledgeRoot='';root.textContent='Перетащите сюда, чтобы вернуть в корень';box.append(root);const add=document.createElement('div');add.className='knowledge-create-actions';add.innerHTML='<button type="button" data-knowledge-add-section="">+ Раздел</button><button type="button" data-knowledge-add-doc="">+ Документ MD</button>';box.append(add);const sections=knowledgeFlat(state.knowledge).filter(n=>n.kind==='section');const expanded=sections.length>0&&sections.every(n=>state.knowledgeExpanded.has(n.id));setAllSectionsToggle($('#knowledgeToggleAll'),expanded,'Свернуть всё','Развернуть всё');}
+  function createLeafDragIcon() {
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.classList.add('drag-leaf-icon');
+    svg.setAttribute('viewBox','0 0 24 24');
+    svg.setAttribute('fill','none');
+    svg.setAttribute('stroke','currentColor');
+    svg.setAttribute('stroke-width','2.2');
+    svg.setAttribute('aria-hidden','true');
+    const circle=document.createElementNS('http://www.w3.org/2000/svg','circle');
+    circle.setAttribute('cx','12');circle.setAttribute('cy','12');circle.setAttribute('r','7');
+    svg.append(circle);
+    return svg;
+  }
+  function renderKnowledgeTree(){const box=$('#knowledgeTree');box.replaceChildren();const render=(nodes,parent,depth=0)=>nodes.forEach(n=>{const row=document.createElement('div');row.className='knowledge-row';row.dataset.knowledgeId=n.id;row.dataset.knowledgeParent=parent||'';row.style.setProperty('--knowledge-depth',depth);const handle=document.createElement('button');handle.className='knowledge-drag-handle';handle.type='button';handle.setAttribute('aria-label','Перетащить');if(n.kind==='document') handle.append(createLeafDragIcon()); else handle.textContent='☰';row.append(handle);const title=document.createElement('button');title.type='button';title.className='knowledge-node-title '+n.kind;title.textContent=n.title;row.append(title);if(n.kind==='section'){const actions=document.createElement('span');actions.className='knowledge-inline-actions';const addDoc=document.createElement('button');addDoc.type='button';addDoc.textContent='+ MD';addDoc.dataset.knowledgeAddDoc=n.id;const addSection=document.createElement('button');addSection.type='button';addSection.textContent='+ раздел';addSection.dataset.knowledgeAddSection=n.id;actions.append(addDoc,addSection);row.append(actions);}box.append(row);if(n.kind==='section'&&state.knowledgeExpanded.has(n.id))render(n.children||[],n.id,depth+1);});render(state.knowledge,null);const root=document.createElement('div');root.className='knowledge-root-drop';root.dataset.knowledgeRoot='';root.textContent='Перетащите сюда, чтобы вернуть в корень';box.append(root);const add=document.createElement('div');add.className='knowledge-create-actions';add.innerHTML='<button type="button" data-knowledge-add-section="">+ Раздел</button><button type="button" data-knowledge-add-doc="">+ Документ MD</button>';box.append(add);const sections=knowledgeFlat(state.knowledge).filter(n=>n.kind==='section');const expanded=sections.length>0&&sections.every(n=>state.knowledgeExpanded.has(n.id));setAllSectionsToggle($('#knowledgeToggleAll'),expanded,'Свернуть всё','Развернуть всё');}
   function knowledgeNode(id){return knowledgeFlat(state.knowledge).find(n=>String(n.id)===String(id));}
   function requestKnowledgeName(heading,value='',action='Создать'){
     const dialog=$('#knowledgeNameModal'),input=$('#knowledgeNameInput');
@@ -555,7 +568,7 @@
   function createDragHandle(kind, id, label) {
     const handle=document.createElement('button'); handle.type='button'; handle.className='drag-handle';
     handle.dataset.dragKind=kind; handle.dataset.dragId=id; handle.title=label; handle.setAttribute('aria-label',label);
-    handle.textContent='☰';
+    if(kind==='task') handle.append(createLeafDragIcon()); else handle.textContent='☰';
     return handle;
   }
 

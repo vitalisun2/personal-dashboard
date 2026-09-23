@@ -112,3 +112,5 @@
 .task-context-menu{position:fixed;z-index:25;display:grid;min-width:144px;padding:4px;border:1px solid var(--border);border-radius:9px;background:color-mix(in srgb,var(--card) 84%,#fff 16%);box-shadow:0 12px 28px rgba(15,23,42,.2)}
 .task-context-menu button{min-height:38px;border:0;border-radius:7px;background:transparent;padding:0 10px;text-align:left;white-space:nowrap}
 .task-context-menu button:hover,.task-context-menu button:focus-visible{background:var(--accent-soft);outline:0}
+.drag-handle,.knowledge-drag-handle{display:grid;place-items:center}
+.drag-leaf-icon{width:20px;height:20px;display:block;pointer-events:none}
