@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light dark">
   <meta http-equiv="Cache-Control" content="no-cache, no-store">
   <title>My Dashboard</title>
-  <link rel="stylesheet" href="styles.css?v=17">
+  <link rel="stylesheet" href="styles.css?v=18">
 </head>
 <body>
   <div class="app-shell">
@@ -204,7 +204,7 @@
       <section id="knowledgeSection" class="hidden">
         <header class="memory-head knowledge-head"><h1>База знаний</h1><div class="knowledge-actions"><button id="chatModelToggleKnowledge" class="icon-button chat-model-toggle" type="button" aria-label="Активная модель DeepSeek. Переключить модель" title="Активная модель DeepSeek. Нажмите, чтобы переключить"></button><button id="knowledgeToggleAll" class="icon-button all-sections-toggle" type="button" title="Развернуть всё" aria-label="Развернуть всё"></button></div></header>
         <form id="knowledgeChatForm" class="add-form"><input id="knowledgeChatInput" type="text" maxlength="2000" placeholder="Опишите документ или задайте вопрос агенту…" autocomplete="off"><button class="primary" type="submit">Chat</button></form>
-        <div class="knowledge-layout"><section id="knowledgeTree" class="knowledge-tree" aria-label="Дерево базы знаний"></section><section id="knowledgeDocument" class="knowledge-document hidden"><button id="knowledgeBack" class="back-button" type="button">← К дереву</button><div class="knowledge-document-head"><h2 id="knowledgeDocumentTitle" class="knowledge-title"></h2><div class="knowledge-mode"><button id="knowledgeModeToggle" type="button">Редактирование</button></div></div><article id="knowledgePreview" class="knowledge-preview"></article><textarea id="knowledgeEditor" class="knowledge-editor hidden" spellcheck="false"></textarea></section></div>
+        <div class="knowledge-layout"><section id="knowledgeTree" class="knowledge-tree" aria-label="Дерево базы знаний"></section><section id="knowledgeDocument" class="knowledge-document hidden"><button id="knowledgeBack" class="back-button" type="button">← К дереву</button><div class="knowledge-document-head"><h2 id="knowledgeDocumentTitle" class="knowledge-title"></h2><div class="knowledge-mode"><button id="knowledgeModeToggle" type="button">Редактирование</button></div></div><article id="knowledgePreview" class="knowledge-preview"></article><textarea id="knowledgeEditor" class="knowledge-editor hidden" spellcheck="false"></textarea><div class="knowledge-version-actions"><button id="knowledgeVersionToggle" class="version-toggle hidden" type="button"></button></div></section></div>
       </section>
 
             </main>
@@ -274,6 +274,6 @@
   </dialog>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script src="app.js?v=15"></script>
+  <script src="app.js?v=16"></script>
 </body>
 </html>

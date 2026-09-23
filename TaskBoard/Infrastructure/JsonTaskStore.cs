@@ -10,6 +10,7 @@ public sealed record TaskBatchUpdate(Guid Id, string ExpectedTitle, string Expec
 public sealed record TaskBatchResult(bool Applied, string? Error);
 public sealed record TaskSectionRename(string OldName, string NewName, Guid[] ExpectedTaskIds);
 public sealed record TaskSectionRenameResult(bool Applied, string? Error);
+public sealed record TaskVersionToggleResult(bool Found, TaskItem? Item);
 
 /// <summary>JSON persistence owned by the task module. It deliberately keeps the established tasks.json contract.</summary>
 public sealed class TaskStore : ITaskRepository
@@ -41,10 +42,10 @@ public sealed class TaskStore : ITaskRepository
     { await _gate.WaitAsync(cancellationToken); try { return (await ReadUnsafeAsync(cancellationToken)).FirstOrDefault(x => x.Id == id); } finally { _gate.Release(); } }
 
     public async Task AddAsync(TaskItem item, CancellationToken cancellationToken = default)
-    { await _gate.WaitAsync(cancellationToken); try { var items = (await ReadUnsafeAsync(cancellationToken)).ToList(); items.Insert(0, item); await WriteUnsafeAsync(items, cancellationToken); } finally { _gate.Release(); } }
+    { await _gate.WaitAsync(cancellationToken); try { var items = (await ReadUnsafeAsync(cancellationToken)).ToList(); items.Insert(0, item with { PreviousVersion = null, ShowingAlternate = false }); await WriteUnsafeAsync(items, cancellationToken); } finally { _gate.Release(); } }
 
     public async Task<TaskItem?> UpdateAsync(Guid id, Func<TaskItem, TaskItem> update, CancellationToken cancellationToken = default)
-    { await _gate.WaitAsync(cancellationToken); try { var items = (await ReadUnsafeAsync(cancellationToken)).ToList(); var index = items.FindIndex(x => x.Id == id); if (index < 0) return null; items[index] = update(items[index]); await WriteUnsafeAsync(items, cancellationToken); return items[index]; } finally { _gate.Release(); } }
+    { await _gate.WaitAsync(cancellationToken); try { var items = (await ReadUnsafeAsync(cancellationToken)).ToList(); var index = items.FindIndex(x => x.Id == id); if (index < 0) return null; items[index] = items[index].CaptureContentEdit(update(items[index])); await WriteUnsafeAsync(items, cancellationToken); return items[index]; } finally { _gate.Release(); } }
 
     public async Task<TaskItem?> UpdateIfAsync(Guid id, Func<TaskItem, bool> condition, Func<TaskItem, TaskItem> update, CancellationToken cancellationToken = default)
     {
@@ -54,9 +55,34 @@ public sealed class TaskStore : ITaskRepository
             var items = (await ReadUnsafeAsync(cancellationToken)).ToList();
             var index = items.FindIndex(x => x.Id == id);
             if (index < 0 || !condition(items[index])) return null;
-            items[index] = update(items[index]);
+            items[index] = items[index].CaptureContentEdit(update(items[index]));
             await WriteUnsafeAsync(items, cancellationToken);
             return items[index];
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<TaskVersionToggleResult> ToggleVersionAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var items = await ReadUnsafeAsync(cancellationToken);
+            var index = items.FindIndex(item => item.Id == id);
+            if (index < 0) return new(false, null);
+            var current = items[index];
+            if (current.PreviousVersion is not { } alternate) return new(true, null);
+            var swapped = current with
+            {
+                Title = alternate.Title,
+                Description = alternate.Description,
+                Section = alternate.Section,
+                PreviousVersion = new TaskContentVersion(current.Title, current.Description, current.Section),
+                ShowingAlternate = !current.ShowingAlternate
+            };
+            items[index] = swapped;
+            await WriteUnsafeAsync(items, cancellationToken);
+            return new(true, swapped);
         }
         finally { _gate.Release(); }
     }
@@ -88,7 +114,7 @@ public sealed class TaskStore : ITaskRepository
             foreach (var update in updates)
             {
                 var index = items.FindIndex(item => item.Id == update.Id);
-                items[index] = items[index] with { Title = update.Title.Trim(), Description = update.Description, Section = update.Section };
+                items[index] = items[index].CaptureContentEdit(items[index] with { Title = update.Title.Trim(), Description = update.Description, Section = update.Section });
             }
             await WriteUnsafeAsync(items, cancellationToken);
             return new(true, null);
@@ -132,10 +158,11 @@ public sealed class TaskStore : ITaskRepository
             if (destinationNames.Overlaps(untouchedSections))
                 return new(false, "Раздел с таким названием уже существует.");
 
+            var originalSections = items.Select(task => task.Section).ToArray();
             foreach (var item in normalized)
             {
-                foreach (var index in Enumerable.Range(0, items.Count).Where(index => items[index].Section.Equals(item.OldName, StringComparison.OrdinalIgnoreCase)))
-                    items[index] = items[index] with { Section = item.NewName };
+                foreach (var index in Enumerable.Range(0, items.Count).Where(index => originalSections[index].Equals(item.OldName, StringComparison.OrdinalIgnoreCase)))
+                    items[index] = items[index].CaptureContentEdit(items[index] with { Section = item.NewName });
             }
             await WriteUnsafeAsync(items, cancellationToken);
             return new(true, null);
@@ -157,7 +184,7 @@ public sealed class TaskStore : ITaskRepository
             for (var i = 0; i < items.Count; i++)
             {
                 if (!items[i].Section.Equals(oldName, StringComparison.OrdinalIgnoreCase) || items[i].Section.Equals(newName, StringComparison.Ordinal)) continue;
-                items[i] = items[i] with { Section = newName }; changed++;
+                items[i] = items[i].CaptureContentEdit(items[i] with { Section = newName }); changed++;
             }
             if (changed > 0) await WriteUnsafeAsync(items, cancellationToken);
             return changed;
@@ -180,7 +207,7 @@ public sealed class TaskStore : ITaskRepository
             for (var i = 0; i < items.Count; i++)
             {
                 if (!items[i].Section.Equals(oldName, StringComparison.OrdinalIgnoreCase) || items[i].Section.Equals(newName, StringComparison.Ordinal)) continue;
-                items[i] = items[i] with { Section = newName }; changed++;
+                items[i] = items[i].CaptureContentEdit(items[i] with { Section = newName }); changed++;
             }
             if (changed > 0) await WriteUnsafeAsync(items, cancellationToken);
             return changed;

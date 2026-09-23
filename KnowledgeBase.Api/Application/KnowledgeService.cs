@@ -2,8 +2,9 @@ using KnowledgeBase.Api.Domain;
 
 namespace KnowledgeBase.Api.Application;
 
-public sealed record KnowledgeNodeDto(Guid Id, string Kind, string Title, Guid? ParentId, int Order, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, List<KnowledgeNodeDto>? Children = null);
-public sealed record KnowledgeDocumentDto(Guid Id, string Kind, string Title, string Content, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
+public sealed record KnowledgeNodeDto(Guid Id, string Kind, string Title, Guid? ParentId, int Order, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, List<KnowledgeNodeDto>? Children = null, bool HasPreviousVersion = false, bool ShowingAlternate = false);
+public sealed record KnowledgeDocumentDto(Guid Id, string Kind, string Title, string Content, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, KnowledgeContentVersion? PreviousVersion = null, bool ShowingAlternate = false);
+public sealed record KnowledgeVersionToggleResult(bool Found, KnowledgeDocumentDto? Document, string? Error = null);
 public sealed record KnowledgeSnapshotNodeDto(Guid Id, string Kind, string Title, Guid? ParentId, int Order, string Path, string? Content, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
 public sealed record KnowledgeSnapshotDto(int SchemaVersion, DateTimeOffset UpdatedAt, IReadOnlyList<KnowledgeSnapshotNodeDto> Nodes);
 
@@ -69,6 +70,8 @@ public sealed class KnowledgeService(IKnowledgeStore store)
             foreach (var change in changes)
             {
                 var node = targets[change.Id];
+                var oldTitle = node.Title;
+                var oldContent = node.Content ?? "";
                 switch (change.Operation)
                 {
                     case "rename_document":
@@ -86,6 +89,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
                             : current + "\n" + addition;
                         break;
                 }
+                CaptureDocumentEdit(node, oldTitle, oldContent);
                 node.UpdatedAt = DateTimeOffset.UtcNow;
             }
 
@@ -139,7 +143,31 @@ public sealed class KnowledgeService(IKnowledgeStore store)
     {
         var data = await store.ReadAsync(ct);
         var node = data.Nodes.FirstOrDefault(n => n.Id == id && !n.IsSection);
-        return node is null ? null : new(node.Id, node.Kind, node.Title, node.Content ?? "", node.CreatedAt, node.UpdatedAt);
+        return node is null ? null : ToDocumentDto(node);
+    }
+
+    public async Task<KnowledgeVersionToggleResult> ToggleDocumentVersionAsync(Guid id, CancellationToken ct)
+    {
+        await mutationGate.WaitAsync(ct);
+        try
+        {
+            var data = await store.ReadAsync(ct);
+            var node = data.Nodes.FirstOrDefault(n => n.Id == id && !n.IsSection);
+            if (node is null) return new(false, null);
+            if (node.PreviousVersion is not { } alternate) return new(true, null);
+            if (data.Nodes.Any(other => other.Id != node.Id && !other.IsSection && other.ParentId == node.ParentId
+                && string.Equals(other.Title, alternate.Title, StringComparison.OrdinalIgnoreCase)))
+                return new(true, null, "В этом разделе уже есть документ с названием предыдущей версии.");
+            var current = new KnowledgeContentVersion(node.Title, node.Content ?? "");
+            node.Title = alternate.Title;
+            node.Content = alternate.Content;
+            node.PreviousVersion = current;
+            node.ShowingAlternate = !node.ShowingAlternate;
+            node.UpdatedAt = DateTimeOffset.UtcNow;
+            await store.WriteAsync(data, ct);
+            return new(true, ToDocumentDto(node));
+        }
+        finally { mutationGate.Release(); }
     }
 
     public async Task<KnowledgeSnapshotDto> GetSnapshotAsync(CancellationToken ct)
@@ -211,7 +239,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
         var clean = title?.Trim(); if (string.IsNullOrWhiteSpace(clean)) return "Название обязательно.";
         await mutationGate.WaitAsync(ct);
         try { var data = await store.ReadAsync(ct); var node = data.Nodes.FirstOrDefault(n => n.Id == id);
-            if (node is null) return "Узел не найден."; node.Title = clean; node.UpdatedAt = DateTimeOffset.UtcNow; await store.WriteAsync(data, ct); return null;
+            if (node is null) return "Узел не найден."; var oldTitle = node.Title; var oldContent = node.Content ?? ""; node.Title = clean; CaptureDocumentEdit(node, oldTitle, oldContent); node.UpdatedAt = DateTimeOffset.UtcNow; await store.WriteAsync(data, ct); return null;
         } finally { mutationGate.Release(); }
     }
 
@@ -219,7 +247,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
     {
         await mutationGate.WaitAsync(ct);
         try { var data = await store.ReadAsync(ct); var node = data.Nodes.FirstOrDefault(n => n.Id == id && !n.IsSection);
-            if (node is null) return "Документ не найден."; node.Content = content ?? ""; node.UpdatedAt = DateTimeOffset.UtcNow; await store.WriteAsync(data, ct); return null;
+            if (node is null) return "Документ не найден."; var oldTitle = node.Title; var oldContent = node.Content ?? ""; node.Content = content ?? ""; CaptureDocumentEdit(node, oldTitle, oldContent); node.UpdatedAt = DateTimeOffset.UtcNow; await store.WriteAsync(data, ct); return null;
         } finally { mutationGate.Release(); }
     }
 
@@ -233,7 +261,10 @@ public sealed class KnowledgeService(IKnowledgeStore store)
             if (node is null) return "Документ не найден.";
             if (node.Title != expectedTitle || (node.Content ?? "") != expectedContent)
                 return "Содержание документа изменилось после предпросмотра. Запись не выполнена; повторите запрос, чтобы увидеть актуальный текст.";
+            var oldTitle = node.Title;
+            var oldContent = node.Content ?? "";
             node.Content = content ?? "";
+            CaptureDocumentEdit(node, oldTitle, oldContent);
             node.UpdatedAt = DateTimeOffset.UtcNow;
             await store.WriteAsync(data, ct);
             return null;
@@ -265,9 +296,19 @@ public sealed class KnowledgeService(IKnowledgeStore store)
         } finally { mutationGate.Release(); }
     }
 
+    private static KnowledgeDocumentDto ToDocumentDto(KnowledgeNode node) =>
+        new(node.Id, node.Kind, node.Title, node.Content ?? "", node.CreatedAt, node.UpdatedAt, node.PreviousVersion, node.ShowingAlternate);
+
+    private static void CaptureDocumentEdit(KnowledgeNode node, string oldTitle, string oldContent)
+    {
+        if (node.IsSection || (node.Title == oldTitle && (node.Content ?? "") == oldContent)) return;
+        node.PreviousVersion = new KnowledgeContentVersion(oldTitle, oldContent);
+        node.ShowingAlternate = false;
+    }
+
     private static bool ValidParent(List<KnowledgeNode> nodes, Guid? id) => id is null || nodes.Any(n => n.Id == id && n.IsSection);
     private static int NextOrder(List<KnowledgeNode> nodes, Guid? parent) => nodes.Count(n => n.ParentId == parent);
     private static bool IsDescendant(List<KnowledgeNode> nodes, Guid candidate, Guid ancestor) { var current = nodes.FirstOrDefault(n => n.Id == candidate); while (current?.ParentId is not null) { if (current.ParentId == ancestor) return true; current = nodes.FirstOrDefault(n => n.Id == current.ParentId); } return false; }
     private static void Normalize(List<KnowledgeNode> nodes) { foreach (var group in nodes.GroupBy(n => n.ParentId)) foreach (var (node, index) in group.OrderBy(n => n.Order).ThenBy(n => n.Title, StringComparer.OrdinalIgnoreCase).Select((n, i) => (n, i))) node.Order = index; }
-    private static List<KnowledgeNodeDto> BuildTree(List<KnowledgeNode> nodes) { var byParent = nodes.GroupBy(n => n.ParentId?.ToString() ?? "").ToDictionary(g => g.Key, g => g.OrderBy(n => n.Order).ThenBy(n => n.Title, StringComparer.OrdinalIgnoreCase).ToList()); List<KnowledgeNodeDto> Build(Guid? parent) => byParent.TryGetValue(parent?.ToString() ?? "", out var list) ? list.Select(n => new KnowledgeNodeDto(n.Id, n.Kind, n.Title, n.ParentId, n.Order, n.CreatedAt, n.UpdatedAt, n.IsSection ? Build(n.Id) : null)).ToList() : []; return Build(null); }
+    private static List<KnowledgeNodeDto> BuildTree(List<KnowledgeNode> nodes) { var byParent = nodes.GroupBy(n => n.ParentId?.ToString() ?? "").ToDictionary(g => g.Key, g => g.OrderBy(n => n.Order).ThenBy(n => n.Title, StringComparer.OrdinalIgnoreCase).ToList()); List<KnowledgeNodeDto> Build(Guid? parent) => byParent.TryGetValue(parent?.ToString() ?? "", out var list) ? list.Select(n => new KnowledgeNodeDto(n.Id, n.Kind, n.Title, n.ParentId, n.Order, n.CreatedAt, n.UpdatedAt, n.IsSection ? Build(n.Id) : null, n.PreviousVersion is not null, n.ShowingAlternate)).ToList() : []; return Build(null); }
 }

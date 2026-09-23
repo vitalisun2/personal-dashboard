@@ -553,8 +553,10 @@
     return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='delete'),{once:true});});
   }
   async function createKnowledge(kind,parentId){await api(`/api/knowledge/${kind==='section'?'sections':'documents'}`,{method:'POST',body:JSON.stringify({title:null,parentId:parentId||null})});if(parentId)state.knowledgeExpanded.add(parentId);await loadKnowledge();showToast(kind==='section'?'Раздел создан':'Документ создан');}
-  function showKnowledgeDocument(doc){state.knowledgeDocument=doc;state.knowledgeEditing=false;$('#knowledgeTree').classList.add('hidden');$('#knowledgeDocument').classList.remove('hidden');$('#knowledgeDocumentTitle').textContent=doc.title;$('#knowledgeEditor').value=doc.content||'';renderKnowledgeMode();}
+  function showKnowledgeDocument(doc){state.knowledgeDocument=doc;state.knowledgeEditing=false;$('#knowledgeTree').classList.add('hidden');$('#knowledgeDocument').classList.remove('hidden');$('#knowledgeDocumentTitle').textContent=doc.title;$('#knowledgeEditor').value=doc.content||'';renderKnowledgeMode();renderKnowledgeVersionToggle();}
   function renderKnowledgeMode(){const edit=state.knowledgeEditing;$('#knowledgeModeToggle').textContent=edit?'Просмотр':'Редактирование';$('#knowledgePreview').classList.toggle('hidden',edit);$('#knowledgeEditor').classList.toggle('hidden',!edit);if(!edit)$('#knowledgePreview').innerHTML=renderMarkdown(state.knowledgeDocument?.content||'');}
+  function setVersionButton(button,item){const available=!!item?.previousVersion;button.classList.toggle('hidden',!available);if(!available)return;const redo=!!item.showingAlternate;button.textContent=redo?'↷':'↶';const label=redo?'Вернуть новую версию':'Вернуть предыдущую версию';button.setAttribute('aria-label',label);button.title=label;}
+  function renderKnowledgeVersionToggle(){setVersionButton($('#knowledgeVersionToggle'),state.knowledgeDocument);}
   function renderMarkdown(value){const lines=escapeHtml(value).split('\n'),out=[];let code=false,buf=[],list=null;const closeList=()=>{if(list){out.push(`</${list}>`);list=null;}};for(const line of lines){if(line.startsWith('```')){closeList();if(code){out.push(`<pre><code>${buf.join('\n')}</code></pre>`);buf=[];}code=!code;continue;}if(code){buf.push(line);continue;}const unordered=/^[-*] /.test(line),ordered=/^\d+\. /.test(line),kind=unordered?'ul':ordered?'ol':null;if(kind){if(list!==kind){closeList();out.push(`<${kind}>`);list=kind;}out.push(`<li>${inlineMd(line.replace(unordered?/^[-*] /:/^\d+\. /,''))}</li>`);continue;}closeList();if(/^### /.test(line))out.push(`<h3>${inlineMd(line.slice(4))}</h3>`);else if(/^## /.test(line))out.push(`<h2>${inlineMd(line.slice(3))}</h2>`);else if(/^# /.test(line))out.push(`<h1>${inlineMd(line.slice(2))}</h1>`);else if(line.trim())out.push(`<p>${inlineMd(line)}</p>`);}closeList();return out.join('');}
   function inlineMd(s){return s.replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\*([^*]+)\*/g,'<em>$1</em>').replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');}
   let knowledgeSaveInFlight=null;
@@ -565,9 +567,23 @@
     if(content===d.content)return;
     editor.disabled=true;
     knowledgeSaveInFlight=api(`/api/knowledge/documents/${d.id}/content`,{method:'PUT',body:JSON.stringify({content})})
-      .then(()=>{d.content=content;})
+      .then(async()=>{d.content=content;const refreshed=await api(`/api/knowledge/documents/${d.id}`);if(state.knowledgeDocument?.id===d.id){state.knowledgeDocument=refreshed;$('#knowledgeDocumentTitle').textContent=refreshed.title;renderKnowledgeVersionToggle();}})
       .finally(()=>{editor.disabled=false;knowledgeSaveInFlight=null;});
     return knowledgeSaveInFlight;
+  }
+  async function toggleKnowledgeVersion(){
+    const button=$('#knowledgeVersionToggle'),editor=$('#knowledgeEditor'),d=state.knowledgeDocument;
+    if(!d||button.disabled)return;
+    button.disabled=true;editor.readOnly=true;
+    try{
+      if(knowledgeSaveInFlight)await knowledgeSaveInFlight;
+      if(state.knowledgeDocument?.id!==d.id)return;
+      if(state.knowledgeEditing&&editor.value!==state.knowledgeDocument.content)await saveKnowledge();
+      if(state.knowledgeDocument?.id!==d.id)return;
+      const updated=await api(`/api/knowledge/documents/${d.id}/toggle-version`,{method:'POST'});
+      if(state.knowledgeDocument?.id===d.id){state.knowledgeDocument=updated;$('#knowledgeDocumentTitle').textContent=updated.title;editor.value=updated.content||'';renderKnowledgeMode();renderKnowledgeVersionToggle();}
+      try{await loadKnowledge();}catch(error){showToast(error.message);}
+    }finally{button.disabled=false;editor.readOnly=false;}
   }
   async function moveKnowledge(id,parentId,order){await api(`/api/knowledge/nodes/${id}/position`,{method:'PUT',body:JSON.stringify({parentId:parentId||null,order})});if(parentId)state.knowledgeExpanded.add(parentId);await loadKnowledge();}
   function closeKnowledgeContext(){document.querySelector('.knowledge-context-menu')?.remove();}
@@ -635,11 +651,22 @@
     cancelAgentEdit();
     state.selectedTaskId=task.id; $('#listView').classList.add('hidden'); $('#detailView').classList.remove('hidden');
     $('#detailSection').textContent=normalizeSection(task.section); $('#detailTitle').textContent=task.title; $('#detailDescription').textContent=task.description;
+    renderTaskActions(task);
+  }
+  function renderTaskActions(task){
     const actions=$('#detailActions'); actions.replaceChildren();
-    const move=document.createElement('button'); move.type='button'; move.className='detail-move'; move.dataset.taskMove=task.id; move.textContent=task.bucket==='backlog'?'→ Сегодня':'← Backlog'; actions.append(move);
+    const move=document.createElement('button'); move.type='button'; move.className='detail-move'; move.dataset.taskMove=task.id; move.textContent=task.bucket==='backlog'?'Сегодня':'Backlog'; actions.append(move);
     if(task.bucket==='today'){const b=document.createElement('button');b.type='button';b.className='detail-status';b.dataset.taskAdvance=task.id;b.textContent=statusLabel[task.status];actions.append(b);}
-    const agentEdit=document.createElement('button'); agentEdit.type='button'; agentEdit.className='detail-edit-agent'; agentEdit.dataset.taskEditAgent=task.id; agentEdit.textContent='Редактировать с агентом'; actions.append(agentEdit);
+    const agentEdit=document.createElement('button'); agentEdit.type='button'; agentEdit.className='detail-edit-agent'; agentEdit.dataset.taskEditAgent=task.id; agentEdit.textContent='С агентом'; agentEdit.title='Редактировать с агентом';agentEdit.setAttribute('aria-label','Редактировать с агентом');actions.append(agentEdit);
+    if(task.previousVersion){const version=document.createElement('button');version.type='button';version.className='version-toggle detail-version-toggle';version.dataset.taskToggleVersion=task.id;setVersionButton(version,task);actions.append(version);}
     const del=document.createElement('button');del.type='button';del.className='detail-delete';del.dataset.taskDelete=task.id;del.textContent='Удалить';actions.append(del);
+  }
+  async function toggleTaskVersion(id,button){
+    if(state.editingDescription||state.editingTitle||state.agentEditing){showToast('Сначала завершите редактирование задачи');return;}
+    const task=state.tasks.find(item=>String(item.id)===String(id));if(!task||button.disabled)return;
+    button.disabled=true;
+    try{const updated=await api(`/api/tasks/${id}/toggle-version`,{method:'POST'});Object.assign(task,updated,{section:normalizeSection(updated.section)});renderTasks();if(String(state.selectedTaskId)===String(id))showTaskDetail(task);}
+    catch(error){button.disabled=false;throw error;}
   }
   function closeTaskDetail(){cancelAgentEdit();state.selectedTaskId=null;$('#detailView').classList.add('hidden');$('#listView').classList.remove('hidden');}
   async function moveTask(id){const t=state.tasks.find(x=>x.id===id);if(!t)return;const updated=await api(`/api/tasks/${id}/bucket`,{method:'PUT',body:JSON.stringify({bucket:t.bucket==='backlog'?'today':'backlog'})});Object.assign(t,updated,{section:normalizeSection(updated.section)});renderTasks();if(state.selectedTaskId===id){showTaskDetail(t);navigate({main:'tasks',taskTab:t.bucket,filter:'all',taskId:id},{replace:true});}}
@@ -680,7 +707,7 @@
     Object.assign(t, updated, { section: normalizeSection(updated.section) });
     cancelDescriptionEdit();
     renderTasks();
-    if (state.selectedTaskId === id) { $('#detailDescription').textContent = updated.description; }
+    if (state.selectedTaskId === id) { $('#detailDescription').textContent = updated.description; renderTaskActions(t); }
     showToast('Описание сохранено');
   }
 
@@ -723,7 +750,7 @@
     Object.assign(t, updated, { section: normalizeSection(updated.section) });
     cancelTitleEdit();
     renderTasks();
-    if (state.selectedTaskId === id) { $('#detailTitle').textContent = updated.title; }
+    if (state.selectedTaskId === id) { $('#detailTitle').textContent = updated.title; renderTaskActions(t); }
     showToast('Заголовок сохранён');
   }
 
@@ -1261,6 +1288,7 @@
   }));
   $('#knowledgeToggleAll').addEventListener('click',()=>{const sections=knowledgeFlat(state.knowledge).filter(n=>n.kind==='section');const allExpanded=sections.length>0&&sections.every(n=>state.knowledgeExpanded.has(n.id));if(allExpanded)state.knowledgeExpanded.clear();else sections.forEach(n=>state.knowledgeExpanded.add(n.id));renderKnowledgeTree();});
   $('#knowledgeBack').addEventListener('click',()=>closeKnowledgeDocument().catch(e=>showToast(e.message)));
+  $('#knowledgeVersionToggle').addEventListener('click',()=>toggleKnowledgeVersion().catch(e=>showToast(e.message)));
   $('#knowledgeModeToggle').addEventListener('click',async()=>{const button=$('#knowledgeModeToggle');if(button.disabled)return;button.disabled=true;try{if(state.knowledgeEditing)await saveKnowledge();state.knowledgeEditing=!state.knowledgeEditing;renderKnowledgeMode();if(state.knowledgeEditing)$('#knowledgeEditor').focus();}catch(e){showToast(e.message);}finally{button.disabled=false;}});
   async function closeKnowledgeDocument(){if(state.knowledgeEditing)await saveKnowledge();$('#knowledgeDocument').classList.add('hidden');$('#knowledgeTree').classList.remove('hidden');state.knowledgeDocument=null;state.knowledgeEditing=false;}
   $('#knowledgeTree').addEventListener('click',async e=>{const addS=e.target.closest('[data-knowledge-add-section]'),addD=e.target.closest('[data-knowledge-add-doc]'),row=e.target.closest('[data-knowledge-id]');if(e.target.closest('.knowledge-drag-handle'))return;try{if(addS){await createKnowledge('section',addS.dataset.knowledgeAddSection||null);return;}if(addD){await createKnowledge('document',addD.dataset.knowledgeAddDoc||null);return;}if(!row)return;const n=knowledgeNode(row.dataset.knowledgeId);if(n.kind==='section'&&e.target.closest('.knowledge-node-title')){state.knowledgeExpanded.has(n.id)?state.knowledgeExpanded.delete(n.id):state.knowledgeExpanded.add(n.id);renderKnowledgeTree();}else if(n.kind==='document'){showKnowledgeDocument(await api(`/api/knowledge/documents/${n.id}`));}}catch(err){showToast(err.message);}});
@@ -1394,6 +1422,7 @@
       const m=e.target.closest('[data-task-move]');if(m){await moveTask(m.dataset.taskMove);return;}
       const a=e.target.closest('[data-task-advance]');if(a){await advanceTask(a.dataset.taskAdvance);return;}
       const ae=e.target.closest('[data-task-edit-agent]');if(ae){beginAgentEdit();return;}
+      const version=e.target.closest('[data-task-toggle-version]');if(version){await toggleTaskVersion(version.dataset.taskToggleVersion,version);return;}
       const d=e.target.closest('[data-task-delete]');if(d){await deleteTask(d.dataset.taskDelete);return;}
       const l=e.target.closest('[data-lesson-open]');if(l){navigate({main:'memory',memoryTab:'lessons',lessonId:l.dataset.lessonOpen});return;}
       const pr=e.target.closest('[data-problem-open]');if(pr){navigate({main:'memory',memoryTab:'problems',problemId:pr.dataset.problemOpen});return;}

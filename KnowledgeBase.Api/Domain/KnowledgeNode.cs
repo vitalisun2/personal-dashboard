@@ -1,5 +1,7 @@
 namespace KnowledgeBase.Api.Domain;
 
+public sealed record KnowledgeContentVersion(string Title, string Content);
+
 public sealed class KnowledgeNode
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -8,6 +10,8 @@ public sealed class KnowledgeNode
     public Guid? ParentId { get; set; }
     public int Order { get; set; }
     public string? Content { get; set; }
+    public KnowledgeContentVersion? PreviousVersion { get; set; }
+    public bool ShowingAlternate { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 

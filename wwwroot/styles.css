@@ -116,4 +116,14 @@
 .task-context-menu button{min-height:38px;border:0;border-radius:7px;background:transparent;padding:0 10px;text-align:left;white-space:nowrap}
 .task-context-menu button:hover,.task-context-menu button:focus-visible{background:var(--accent-soft);outline:0}
 .drag-handle,.knowledge-drag-handle{display:grid;place-items:center}
+.detail-actions{gap:6px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}
+.detail-actions button{flex:none;min-height:34px;white-space:nowrap;font-size:12px}
+.detail-move,.detail-status,.detail-edit-agent,.detail-delete{padding:8px 10px}
+.detail-status{width:auto}
+.version-toggle{display:inline-flex;align-items:center;justify-content:center;min-width:34px;min-height:34px;border:1px solid var(--border);border-radius:8px;background:var(--card);font-size:20px;line-height:1}
+.detail-actions .version-toggle{padding:0;font-size:20px}
+.version-toggle:hover,.version-toggle:focus-visible{background:var(--accent-soft);border-color:var(--accent);outline:0}
+.version-toggle:disabled{opacity:.55;cursor:wait}
+.knowledge-version-actions{display:flex;justify-content:flex-start;margin-top:12px}
+.knowledge-version-actions .version-toggle{min-width:42px;min-height:38px}
 .drag-leaf-icon{width:20px;height:20px;display:block;pointer-events:none}

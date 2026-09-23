@@ -2,7 +2,23 @@ namespace TaskBoard.Domain;
 
 public enum TaskBucket { Backlog, Today }
 public enum TaskStatus { New, InProgress, Completed }
-public sealed record TaskItem(Guid Id, string Title, string Description, string Section, TaskBucket Bucket, TaskStatus Status, DateTimeOffset CreatedAt);
+public sealed record TaskContentVersion(string Title, string Description, string Section);
+public sealed record TaskItem(Guid Id, string Title, string Description, string Section, TaskBucket Bucket, TaskStatus Status, DateTimeOffset CreatedAt)
+{
+    public TaskContentVersion? PreviousVersion { get; init; }
+    public bool ShowingAlternate { get; init; }
+
+    public TaskItem CaptureContentEdit(TaskItem updated)
+    {
+        if (Title == updated.Title && Description == updated.Description && Section == updated.Section)
+            return updated;
+        return updated with
+        {
+            PreviousVersion = new TaskContentVersion(Title, Description, Section),
+            ShowingAlternate = false
+        };
+    }
+}
 public sealed record TaskDraft(string Title, string Description, string Section);
 
 public sealed record CreateTaskRequest(string? Text);
