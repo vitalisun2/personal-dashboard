@@ -3,10 +3,11 @@ using AC = AgentChat;
 namespace PersonalDashboard.Tests;
 
 [TestClass]
+[DoNotParallelize]
 public sealed class ScopedChatTests
 {
     [TestMethod]
-    public async Task KnowledgeChatAndClassifiersFallBackToOllamaWhenOpenRouterReturnsAnError()
+    public async Task KnowledgeChatAndClassifiersUseOllamaFirstAndFallBackToOpenRouter()
     {
         var old = new Dictionary<string, string?>
         {
@@ -15,7 +16,8 @@ public sealed class ScopedChatTests
             ["OPENROUTER_URL"] = Environment.GetEnvironmentVariable("OPENROUTER_URL"),
             ["OPENROUTER_MODEL"] = Environment.GetEnvironmentVariable("OPENROUTER_MODEL"),
             ["OLLAMA_URL"] = Environment.GetEnvironmentVariable("OLLAMA_URL"),
-            ["OLLAMA_MODEL"] = Environment.GetEnvironmentVariable("OLLAMA_MODEL")
+            ["OLLAMA_MODEL"] = Environment.GetEnvironmentVariable("OLLAMA_MODEL"),
+            ["OLLAMA_CHAT_MODEL"] = Environment.GetEnvironmentVariable("OLLAMA_CHAT_MODEL")
         };
         var ollamaBodies = new Queue<string>([
             "ответ Ollama",
@@ -23,10 +25,12 @@ public sealed class ScopedChatTests
             "{\"decision\":\"approve\",\"confidence\":0.99}"
         ]);
         var hosts = new List<string>();
+        var failFirstLocal = true;
         var handler = new StubHttpHandler(request =>
         {
             hosts.Add(request.RequestUri!.Host);
-            if (request.RequestUri.Host == "openrouter.test") return new HttpResponseMessage(System.Net.HttpStatusCode.PaymentRequired);
+            if (request.RequestUri.Host == "ollama.test" && failFirstLocal)
+            { failFirstLocal = false; return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable); }
             var content = ollamaBodies.Dequeue();
             var body = System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } });
             return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(body) };
@@ -37,7 +41,7 @@ public sealed class ScopedChatTests
         Environment.SetEnvironmentVariable("OPENROUTER_URL", "https://openrouter.test/v1");
         Environment.SetEnvironmentVariable("OPENROUTER_MODEL", "test/router");
         Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
-        Environment.SetEnvironmentVariable("OLLAMA_MODEL", "test/local");
+        Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", "test/local");
         try
         {
             var responder = new ReadOnlyChatResponder(new HttpClient(handler));
@@ -48,7 +52,7 @@ public sealed class ScopedChatTests
             var confirmation = await ((IKnowledgeIntentRouter)responder).ClassifyConfirmationAsync("предпросмотр", "да", CancellationToken.None);
             Assert.AreEqual("ok", confirmation.Status);
             Assert.AreEqual("approve", confirmation.Decision);
-            CollectionAssert.AreEqual(new[] { "openrouter.test", "ollama.test", "openrouter.test", "ollama.test", "openrouter.test", "ollama.test" }, hosts);
+            CollectionAssert.AreEqual(new[] { "ollama.test", "openrouter.test", "ollama.test", "ollama.test" }, hosts);
         }
         finally
         {
@@ -275,6 +279,104 @@ public sealed class ScopedChatTests
     }
 
     [TestMethod]
+    public async Task OrdinaryKnowledgeQuestionSendsFreshCompleteSnapshotToLocalModelFirst()
+    {
+        var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        var oldFile = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE");
+        var oldOllama = Environment.GetEnvironmentVariable("OLLAMA_URL");
+        var oldModel = Environment.GetEnvironmentVariable("OLLAMA_CHAT_MODEL");
+        var document = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Финансы", Content = "Актуальный лимит: 1200", ParentId = null };
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [document] });
+        string? qaPayload = null;
+        string? qaModel = null;
+        var requests = new List<string>();
+        var handler = new StubHttpHandler(request =>
+        {
+            requests.Add(request.RequestUri!.Host);
+            var body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var parsed = System.Text.Json.JsonDocument.Parse(body);
+            var messageContents = parsed.RootElement.GetProperty("messages").EnumerateArray().Select(message => message.GetProperty("content").GetString() ?? "").ToArray();
+            if (messageContents.Any(content => content.Contains("Полный актуальный снимок", StringComparison.Ordinal)))
+            { qaPayload = body; qaModel = parsed.RootElement.GetProperty("model").GetString(); }
+            var isQa = qaPayload == body;
+            var content = isQa ? "Ответ по документу" : "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null}";
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } }))
+            };
+        });
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", null);
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", null);
+        Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
+        Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", "qwen3:8b-64k");
+        try
+        {
+            var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), new ReadOnlyChatResponder(new HttpClient(handler)));
+            var reply = await facade.HandleAsync(new AC.ChatTurn("Какой лимит?", true, null, []), CancellationToken.None);
+            Assert.AreEqual("Ответ по документу", reply.Text);
+            Assert.AreEqual(1, store.Reads, "The complete knowledge snapshot should come from one current store read.");
+            Assert.IsNotNull(qaPayload);
+            using var sent = System.Text.Json.JsonDocument.Parse(qaPayload);
+            var sentContents = sent.RootElement.GetProperty("messages").EnumerateArray().Select(message => message.GetProperty("content").GetString() ?? "").ToArray();
+            Assert.IsTrue(sentContents.Any(content => content.Contains("Финансы", StringComparison.Ordinal) && content.Contains("Актуальный лимит: 1200", StringComparison.Ordinal)));
+            Assert.AreEqual("qwen3:8b-64k", qaModel);
+            CollectionAssert.AreEqual(new[] { "ollama.test", "ollama.test" }, requests);
+            Assert.AreEqual(0, store.Writes);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", oldKey);
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", oldFile);
+            Environment.SetEnvironmentVariable("OLLAMA_URL", oldOllama);
+            Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", oldModel);
+            handler.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public async Task OversizedScopedSnapshotSkipsLocalWithoutTruncatingRouterPayload()
+    {
+        var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        var oldFile = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE");
+        var oldRouter = Environment.GetEnvironmentVariable("OPENROUTER_URL");
+        var oldOllama = Environment.GetEnvironmentVariable("OLLAMA_URL");
+        var sentBody = "";
+        var hosts = new List<string>();
+        var handler = new StubHttpHandler(request =>
+        {
+            hosts.Add(request.RequestUri!.Host);
+            sentBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = "полный ответ" } } } }))
+            };
+        });
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", "test-only-key");
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", null);
+        Environment.SetEnvironmentVariable("OPENROUTER_URL", "https://router.test/v1");
+        Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
+        const string marker = "конец полного снимка";
+        try
+        {
+            var responder = new ReadOnlyChatResponder(new HttpClient(handler));
+            var reply = await ((IScopedChatResponder)responder).ReplyAsync("вопрос", [], new string('я', 100_001) + marker, CancellationToken.None);
+            Assert.AreEqual("полный ответ", reply);
+            CollectionAssert.AreEqual(new[] { "router.test" }, hosts);
+            using var parsedBody = System.Text.Json.JsonDocument.Parse(sentBody);
+            var sentContents = parsedBody.RootElement.GetProperty("messages").EnumerateArray().Select(message => message.GetProperty("content").GetString() ?? "");
+            Assert.IsTrue(sentContents.Any(content => content.Contains(marker, StringComparison.Ordinal)), "The router should receive the full, untruncated snapshot.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", oldKey);
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", oldFile);
+            Environment.SetEnvironmentVariable("OPENROUTER_URL", oldRouter);
+            Environment.SetEnvironmentVariable("OLLAMA_URL", oldOllama);
+            handler.Dispose();
+        }
+    }
+
+    [TestMethod]
     public async Task AmbiguousDocumentDestinationAsksClarificationWithoutMutation()
     {
         var first = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "document", Title = "Doc 4", Content = "Первый" };
@@ -394,7 +496,8 @@ public sealed class ScopedChatTests
     {
         public KnowledgeBase.Api.Domain.KnowledgeDocument Value { get; private set; } = value;
         public int Writes { get; private set; }
-        public Task<KnowledgeBase.Api.Domain.KnowledgeDocument> ReadAsync(CancellationToken cancellationToken) => Task.FromResult(Value);
+        public int Reads { get; private set; }
+        public Task<KnowledgeBase.Api.Domain.KnowledgeDocument> ReadAsync(CancellationToken cancellationToken) { Reads++; return Task.FromResult(Value); }
         public Task WriteAsync(KnowledgeBase.Api.Domain.KnowledgeDocument document, CancellationToken cancellationToken) { Value = document; Writes++; return Task.CompletedTask; }
     }
 }

@@ -47,7 +47,13 @@ public sealed class LlmTaskAgent : ITaskAgent
     public async Task<string> ChatAsync(string text, IReadOnlyList<TaskConversationMessage>? history = null)
     {
         var context = history is { Count: > 0 } ? history : [new TaskConversationMessage("user", text)];
-        foreach (var provider in _providers) try { if (await provider.TryChatAsync(context) is { Length: > 0 } reply) return reply.Trim(); } catch (Exception ex) { _logger.LogWarning(ex, "Провайдер {Provider} не обработал чат", provider.Name); }
+        var localFirst = _providers.OrderBy(provider => provider.Name.StartsWith("Ollama", StringComparison.Ordinal) ? 0 : 1);
+        foreach (var provider in localFirst)
+        {
+            // Keep the complete prompt below a conservative 32 KB UTF-8 text budget for Qwen context and output headroom.
+            if (provider.Name.StartsWith("Ollama", StringComparison.Ordinal) && context.Sum(message => System.Text.Encoding.UTF8.GetByteCount(message.Text)) > 32_000) continue;
+            try { if (await provider.TryChatAsync(context) is { Length: > 0 } reply) return reply.Trim(); } catch (Exception ex) { _logger.LogWarning(ex, "Провайдер {Provider} не обработал чат", provider.Name); }
+        }
         return await _fallback.ChatAsync(text, context);
     }
     private async Task<TaskDraft> ParseOrFallbackAsync(string text, IReadOnlyCollection<string> sections, Func<Task<TaskDraft>> fallback)

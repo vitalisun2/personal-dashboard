@@ -228,6 +228,15 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  function appendChatBubble(role, text = '') {
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble ${role === 'user' ? 'chat-user' : 'chat-agent'}`;
+    bubble.textContent = text;
+    $('#chatMessages').append(bubble);
+    $('#chatMessages').scrollTop = $('#chatMessages').scrollHeight;
+    return bubble;
+  }
+
   function syncMobileChatViewport() {
     const viewport = window.visualViewport;
     const top = viewport?.offsetTop || 0;
@@ -250,14 +259,42 @@
   window.addEventListener('resize', syncMobileChatViewport);
   $('#chatInput').addEventListener('focus', syncMobileChatViewport);
   $('#chatInput').addEventListener('blur', () => setTimeout(syncMobileChatViewport, 80));
+  let chatSending = false;
   async function sendChatMessage(text) {
+    if (chatSending) return;
+    chatSending = true;
     const route = parseRoute();
-    const data = route.sessionId
-      ? await api(`/api/${chatScope}/chat/sessions/${encodeURIComponent(route.sessionId)}/messages`, { method: 'POST', body: JSON.stringify({ text }) })
-      : await api(`/api/${chatScope}/chat/sessions`, { method: 'POST', body: JSON.stringify({ text }) });
-    const sessionId = data.session.id;
-    if (!route.sessionId) navigate({ main: chatScope, chat: true, sessionId }, { replace: true });
-    renderChat(data.session);
+    appendChatBubble('user', text);
+    const pendingBubble = appendChatBubble('agent');
+    pendingBubble.classList.add('chat-pending');
+    pendingBubble.setAttribute('aria-label', 'Ответ готовится');
+    let dotCount = 1;
+    pendingBubble.textContent = '.';
+    const pendingTimer = setInterval(() => { dotCount = dotCount % 3 + 1; pendingBubble.textContent = '.'.repeat(dotCount); }, 350);
+    try {
+      const data = route.sessionId
+        ? await api(`/api/${chatScope}/chat/sessions/${encodeURIComponent(route.sessionId)}/messages`, { method: 'POST', body: JSON.stringify({ text }) })
+        : await api(`/api/${chatScope}/chat/sessions`, { method: 'POST', body: JSON.stringify({ text }) });
+      const sessionId = data.session.id;
+      const messages = data.session.messages || [];
+      const answer = [...messages].reverse().find(message => message.role !== 'user');
+      clearInterval(pendingTimer);
+      pendingBubble.classList.remove('chat-pending');
+      pendingBubble.removeAttribute('aria-label');
+      pendingBubble.textContent = answer?.text || 'Ответ не получен.';
+      if (!route.sessionId) {
+        const sessionRoute = { main: chatScope, chat: true, sessionId };
+        history.replaceState(routeEntry(sessionRoute, Boolean(history.state?.entry)), '', routeHash(sessionRoute));
+      }
+    } catch (error) {
+      clearInterval(pendingTimer);
+      pendingBubble.classList.remove('chat-pending');
+      pendingBubble.removeAttribute('aria-label');
+      pendingBubble.textContent = `Ошибка: ${error.message}`;
+      throw error;
+    } finally {
+      chatSending = false;
+    }
   }
 
   function applyCurrentRoute() {
@@ -1276,9 +1313,9 @@
   $('#backButton').addEventListener('click',()=>goBack({main:'tasks',taskTab:state.taskTab,filter:state.taskFilter}));
     $('#detailDescription').addEventListener('click', beginDescriptionEdit);
     $('#detailTitle').addEventListener('click', beginTitleEdit);
-  $('#addForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();navigate({main:'tasks',chat:true,sessionId:null},{replace:false});if(!text)return;btn.disabled=true;btn.classList.add('sending');try{$('#taskInput').value='';await sendChatMessage(text);}catch(err){showToast(err.message);navigate({main:'tasks',taskTab:'backlog',filter:'all'},{replace:true});}finally{btn.disabled=false;btn.classList.remove('sending');}});
-  $('#knowledgeChatForm').addEventListener('submit',async e=>{e.preventDefault();const input=$('#knowledgeChatInput');const text=input.value.trim();input.value='';navigate({main:'knowledge',chat:true,sessionId:null},{replace:false});if(text)try{await sendChatMessage(text);}catch(err){showToast(err.message);}});
-  $('#chatForm').addEventListener('submit',async e=>{e.preventDefault();const input=$('#chatInput');const text=input.value.trim();if(!text)return;input.value='';try{await sendChatMessage(text);}catch(err){showToast(err.message);}});
+  $('#addForm').addEventListener('submit',async e=>{e.preventDefault();if(chatSending)return;const btn=$('#addForm button[type="submit"]');const text=$('#taskInput').value.trim();navigate({main:'tasks',chat:true,sessionId:null},{replace:false});if(!text)return;btn.disabled=true;btn.classList.add('sending');try{$('#taskInput').value='';await sendChatMessage(text);}catch(err){showToast(err.message);navigate({main:'tasks',taskTab:'backlog',filter:'all'},{replace:true});}finally{btn.disabled=false;btn.classList.remove('sending');}});
+  $('#knowledgeChatForm').addEventListener('submit',async e=>{e.preventDefault();if(chatSending)return;const input=$('#knowledgeChatInput');const text=input.value.trim();input.value='';navigate({main:'knowledge',chat:true,sessionId:null},{replace:false});if(text)try{await sendChatMessage(text);}catch(err){showToast(err.message);}});
+  $('#chatForm').addEventListener('submit',async e=>{e.preventDefault();if(chatSending)return;const input=$('#chatInput');const text=input.value.trim();if(!text)return;input.value='';try{await sendChatMessage(text);}catch(err){showToast(err.message);}});
   $('#chatBackButton').addEventListener('click',()=>navigate(chatScope==='tasks'?{main:'tasks',taskTab:'backlog',filter:'all'}:{main:'knowledge'}));
   $('#taskDraftForm').addEventListener('submit', e => { e.preventDefault(); reviseTaskDraft(); });
   $('#taskDraftConfirm').addEventListener('click', confirmTaskDraft);

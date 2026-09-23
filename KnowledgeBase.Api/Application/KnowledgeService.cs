@@ -4,6 +4,8 @@ namespace KnowledgeBase.Api.Application;
 
 public sealed record KnowledgeNodeDto(Guid Id, string Kind, string Title, Guid? ParentId, int Order, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, List<KnowledgeNodeDto>? Children = null);
 public sealed record KnowledgeDocumentDto(Guid Id, string Kind, string Title, string Content, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
+public sealed record KnowledgeSnapshotNodeDto(Guid Id, string Kind, string Title, Guid? ParentId, int Order, string Path, string? Content, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
+public sealed record KnowledgeSnapshotDto(int SchemaVersion, DateTimeOffset UpdatedAt, IReadOnlyList<KnowledgeSnapshotNodeDto> Nodes);
 
 public sealed record CreateSectionRequest(string? Title, Guid? ParentId);
 public sealed record CreateDocumentRequest(string? Title, string? Content, Guid? ParentId);
@@ -31,6 +33,29 @@ public sealed class KnowledgeService(IKnowledgeStore store)
         var data = await store.ReadAsync(ct);
         var node = data.Nodes.FirstOrDefault(n => n.Id == id && !n.IsSection);
         return node is null ? null : new(node.Id, node.Kind, node.Title, node.Content ?? "", node.CreatedAt, node.UpdatedAt);
+    }
+
+    public async Task<KnowledgeSnapshotDto> GetSnapshotAsync(CancellationToken ct)
+    {
+        var data = await store.ReadAsync(ct);
+        var byId = data.Nodes.ToDictionary(node => node.Id);
+        string PathFor(KnowledgeNode node)
+        {
+            var parts = new Stack<string>();
+            var current = node;
+            var seen = new HashSet<Guid>();
+            while (seen.Add(current.Id))
+            {
+                parts.Push(current.Title);
+                if (current.ParentId is not Guid parentId || !byId.TryGetValue(parentId, out current!)) break;
+            }
+            return string.Join(" / ", parts);
+        }
+        var nodes = data.Nodes.OrderBy(node => PathFor(node), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(node => node.Order)
+            .Select(node => new KnowledgeSnapshotNodeDto(node.Id, node.Kind, node.Title, node.ParentId, node.Order, PathFor(node), node.Content, node.CreatedAt, node.UpdatedAt))
+            .ToArray();
+        return new KnowledgeSnapshotDto(data.SchemaVersion, data.UpdatedAt, nodes);
     }
 
     public async Task<(KnowledgeNode? Node, string? Error)> CreateAsync(string kind, string? title, string? content, Guid? parentId, CancellationToken ct)
