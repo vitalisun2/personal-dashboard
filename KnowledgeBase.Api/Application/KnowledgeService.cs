@@ -116,6 +116,24 @@ public sealed class KnowledgeService(IKnowledgeStore store)
         } finally { mutationGate.Release(); }
     }
 
+    public async Task<string?> UpdateContentIfCurrentAsync(Guid id, string expectedTitle, string expectedContent, string? content, CancellationToken ct)
+    {
+        await mutationGate.WaitAsync(ct);
+        try
+        {
+            var data = await store.ReadAsync(ct);
+            var node = data.Nodes.FirstOrDefault(n => n.Id == id && !n.IsSection);
+            if (node is null) return "Документ не найден.";
+            if (node.Title != expectedTitle || (node.Content ?? "") != expectedContent)
+                return "Содержание документа изменилось после предпросмотра. Запись не выполнена; повторите запрос, чтобы увидеть актуальный текст.";
+            node.Content = content ?? "";
+            node.UpdatedAt = DateTimeOffset.UtcNow;
+            await store.WriteAsync(data, ct);
+            return null;
+        }
+        finally { mutationGate.Release(); }
+    }
+
     public async Task<string?> MoveAsync(Guid id, Guid? parentId, int order, CancellationToken ct)
     {
         await mutationGate.WaitAsync(ct);

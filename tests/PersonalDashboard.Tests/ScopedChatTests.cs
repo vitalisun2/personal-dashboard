@@ -7,7 +7,7 @@ namespace PersonalDashboard.Tests;
 public sealed class ScopedChatTests
 {
     [TestMethod]
-    public async Task KnowledgeChatAndClassifiersUseOllamaFirstAndFallBackToOpenRouter()
+    public async Task KnowledgeChatAndClassifiersUseOpenRouterFirstAndFallBackToOllama()
     {
         var old = new Dictionary<string, string?>
         {
@@ -19,20 +19,26 @@ public sealed class ScopedChatTests
             ["OLLAMA_MODEL"] = Environment.GetEnvironmentVariable("OLLAMA_MODEL"),
             ["OLLAMA_CHAT_MODEL"] = Environment.GetEnvironmentVariable("OLLAMA_CHAT_MODEL")
         };
-        var ollamaBodies = new Queue<string>([
+        var replyBodies = new Queue<string>([
             "ответ Ollama",
             "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null}",
             "{\"decision\":\"approve\",\"confidence\":0.99}"
         ]);
         var hosts = new List<string>();
-        var failFirstLocal = true;
+        string? routerBody = null;
+        string? ollamaBody = null;
+        var failFirstRouter = true;
         var handler = new StubHttpHandler(request =>
         {
             hosts.Add(request.RequestUri!.Host);
-            if (request.RequestUri.Host == "ollama.test" && failFirstLocal)
-            { failFirstLocal = false; return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable); }
-            var content = ollamaBodies.Dequeue();
-            var body = System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } });
+            if (request.RequestUri.Host == "openrouter.test") routerBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            if (request.RequestUri.Host == "ollama.test") ollamaBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            if (request.RequestUri.Host == "openrouter.test" && failFirstRouter)
+            { failFirstRouter = false; return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable); }
+            var content = replyBodies.Dequeue();
+            var body = request.RequestUri.Host == "ollama.test"
+                ? System.Text.Json.JsonSerializer.Serialize(new { message = new { content } })
+                : System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } });
             return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(body) };
         });
         foreach (var pair in old) Environment.SetEnvironmentVariable(pair.Key, pair.Value);
@@ -52,7 +58,16 @@ public sealed class ScopedChatTests
             var confirmation = await ((IKnowledgeIntentRouter)responder).ClassifyConfirmationAsync("предпросмотр", "да", CancellationToken.None);
             Assert.AreEqual("ok", confirmation.Status);
             Assert.AreEqual("approve", confirmation.Decision);
-            CollectionAssert.AreEqual(new[] { "ollama.test", "openrouter.test", "ollama.test", "ollama.test" }, hosts);
+            CollectionAssert.AreEqual(new[] { "openrouter.test", "ollama.test", "openrouter.test", "openrouter.test" }, hosts);
+            using var routing = System.Text.Json.JsonDocument.Parse(routerBody!);
+            Assert.AreEqual("throughput", routing.RootElement.GetProperty("provider").GetProperty("sort").GetString());
+            Assert.AreEqual(0.10, routing.RootElement.GetProperty("provider").GetProperty("max_price").GetProperty("prompt").GetDouble());
+            Assert.AreEqual(0.25, routing.RootElement.GetProperty("provider").GetProperty("max_price").GetProperty("completion").GetDouble());
+            using var local = System.Text.Json.JsonDocument.Parse(ollamaBody!);
+            Assert.AreEqual("test/local", local.RootElement.GetProperty("model").GetString());
+            Assert.IsFalse(local.RootElement.GetProperty("think").GetBoolean());
+            Assert.IsFalse(local.RootElement.GetProperty("stream").GetBoolean());
+            Assert.IsTrue(hosts.Contains("ollama.test"));
         }
         finally
         {
@@ -279,7 +294,7 @@ public sealed class ScopedChatTests
     }
 
     [TestMethod]
-    public async Task OrdinaryKnowledgeQuestionSendsFreshCompleteSnapshotToLocalModelFirst()
+    public async Task OrdinaryKnowledgeQuestionSendsFreshCompleteSnapshotToGemmaFallback()
     {
         var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
         var oldFile = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE");
@@ -301,15 +316,13 @@ public sealed class ScopedChatTests
             { qaPayload = body; qaModel = parsed.RootElement.GetProperty("model").GetString(); }
             var isQa = qaPayload == body;
             var content = isQa ? "Ответ по документу" : "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null}";
-            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-            {
-                Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } }))
-            };
+            var responseBody = System.Text.Json.JsonSerializer.Serialize(new { message = new { content } });
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(responseBody) };
         });
         Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", null);
         Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", null);
         Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
-        Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", "qwen3:8b-64k");
+        Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", "gemma4:e4b-it-qat");
         try
         {
             var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store), new ReadOnlyChatResponder(new HttpClient(handler)));
@@ -318,11 +331,60 @@ public sealed class ScopedChatTests
             Assert.AreEqual(1, store.Reads, "The complete knowledge snapshot should come from one current store read.");
             Assert.IsNotNull(qaPayload);
             using var sent = System.Text.Json.JsonDocument.Parse(qaPayload);
+            Assert.IsTrue(requests.Contains("ollama.test"));
             var sentContents = sent.RootElement.GetProperty("messages").EnumerateArray().Select(message => message.GetProperty("content").GetString() ?? "").ToArray();
             Assert.IsTrue(sentContents.Any(content => content.Contains("Арт - необходимый минимум", StringComparison.Ordinal) && content.Contains("Декор для каждой локации", StringComparison.Ordinal) && content.Contains("Мысли", StringComparison.Ordinal) && content.Contains("Идеи про декор", StringComparison.Ordinal)));
-            Assert.AreEqual("qwen3:8b-64k", qaModel);
+            Assert.AreEqual("gemma4:e4b-it-qat", qaModel);
+            Assert.IsFalse(System.Text.Json.JsonDocument.Parse(qaPayload).RootElement.GetProperty("think").GetBoolean());
+            Assert.IsFalse(System.Text.Json.JsonDocument.Parse(qaPayload).RootElement.GetProperty("stream").GetBoolean());
             CollectionAssert.AreEqual(new[] { "ollama.test" }, requests);
             Assert.AreEqual(0, store.Writes);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", oldKey);
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", oldFile);
+            Environment.SetEnvironmentVariable("OLLAMA_URL", oldOllama);
+            Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", oldModel);
+            handler.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public async Task GemmaMutationClassifierReceivesNativeJsonSchemaAndContextOptions()
+    {
+        var oldKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        var oldFile = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY_FILE");
+        var oldOllama = Environment.GetEnvironmentVariable("OLLAMA_URL");
+        var oldModel = Environment.GetEnvironmentVariable("OLLAMA_CHAT_MODEL");
+        string? sentBody = null;
+        string? sentPath = null;
+        var handler = new StubHttpHandler(request =>
+        {
+            sentPath = request.RequestUri!.AbsolutePath;
+            sentBody = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            var response = new { message = new { content = "{\"kind\":\"conversation\",\"reference\":null,\"title\":null,\"content\":null,\"section\":null,\"question\":null}" } };
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(response)) };
+        });
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", null);
+        Environment.SetEnvironmentVariable("OPENROUTER_API_KEY_FILE", null);
+        Environment.SetEnvironmentVariable("OLLAMA_URL", "http://ollama.test");
+        Environment.SetEnvironmentVariable("OLLAMA_CHAT_MODEL", "gemma4:e4b-it-qat");
+        try
+        {
+            var responder = new ReadOnlyChatResponder(new HttpClient(handler));
+            var result = await ((IKnowledgeIntentRouter)responder).ClassifyAsync("Найди документ про декор", null, "полный snapshot", CancellationToken.None);
+
+            Assert.AreEqual("ok", result.Status);
+            Assert.AreEqual("conversation", result.Intent!.Kind);
+            Assert.AreEqual("/api/chat", sentPath);
+            using var sent = System.Text.Json.JsonDocument.Parse(sentBody!);
+            Assert.AreEqual("gemma4:e4b-it-qat", sent.RootElement.GetProperty("model").GetString());
+            Assert.IsFalse(sent.RootElement.GetProperty("think").GetBoolean());
+            Assert.AreEqual(65536, sent.RootElement.GetProperty("options").GetProperty("num_ctx").GetInt32());
+            var format = sent.RootElement.GetProperty("format");
+            Assert.AreEqual("object", format.GetProperty("type").GetString());
+            Assert.IsTrue(format.GetProperty("required").EnumerateArray().Any(item => item.GetString() == "kind"));
         }
         finally
         {

@@ -19,7 +19,7 @@ services:
       TASKS_PROTECTION_ENABLED: "true"
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct-2507-q4_K_M}
-      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-qwen3:8b-64k}
+      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:e4b-it-qat}
       OPENROUTER_URL: ${OPENROUTER_URL:-https://openrouter.ai/api/v1}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-deepseek/deepseek-v4-flash-0731}
       OPENROUTER_API_KEY_FILE: /run/secrets/openrouter-api-key

@@ -16,6 +16,7 @@ public interface ITaskAgent
     Task<TaskDraft> CreateDraftAsync(string rawText, IReadOnlyCollection<string> existingSections);
     Task<TaskDraft> ReviseDraftAsync(TaskDraft draft, string correction, IReadOnlyCollection<string> existingSections);
     Task<TaskDraft> EditDraftAsync(TaskDraft current, string instruction, IReadOnlyCollection<string> existingSections);
+    Task<string?> ResolveChatActionAsync(IReadOnlyList<TaskConversationMessage> context) => Task.FromResult<string?>(null);
 }
 
 public sealed record TaskConversationMessage(string Role, string Text);

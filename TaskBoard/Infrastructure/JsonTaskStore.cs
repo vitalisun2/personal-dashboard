@@ -41,6 +41,21 @@ public sealed class TaskStore : ITaskRepository
     public async Task<TaskItem?> UpdateAsync(Guid id, Func<TaskItem, TaskItem> update, CancellationToken cancellationToken = default)
     { await _gate.WaitAsync(cancellationToken); try { var items = (await ReadUnsafeAsync(cancellationToken)).ToList(); var index = items.FindIndex(x => x.Id == id); if (index < 0) return null; items[index] = update(items[index]); await WriteUnsafeAsync(items, cancellationToken); return items[index]; } finally { _gate.Release(); } }
 
+    public async Task<TaskItem?> UpdateIfAsync(Guid id, Func<TaskItem, bool> condition, Func<TaskItem, TaskItem> update, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var items = (await ReadUnsafeAsync(cancellationToken)).ToList();
+            var index = items.FindIndex(x => x.Id == id);
+            if (index < 0 || !condition(items[index])) return null;
+            items[index] = update(items[index]);
+            await WriteUnsafeAsync(items, cancellationToken);
+            return items[index];
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     { await _gate.WaitAsync(cancellationToken); try { await WriteUnsafeAsync((await ReadUnsafeAsync(cancellationToken)).Where(x => x.Id != id).ToList(), cancellationToken); } finally { _gate.Release(); } }
 
@@ -52,6 +67,29 @@ public sealed class TaskStore : ITaskRepository
         try
         {
             var items = await ReadUnsafeAsync(cancellationToken); var changed = 0;
+            for (var i = 0; i < items.Count; i++)
+            {
+                if (!items[i].Section.Equals(oldName, StringComparison.OrdinalIgnoreCase) || items[i].Section.Equals(newName, StringComparison.Ordinal)) continue;
+                items[i] = items[i] with { Section = newName }; changed++;
+            }
+            if (changed > 0) await WriteUnsafeAsync(items, cancellationToken);
+            return changed;
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<int?> RenameSectionIfMembersAsync(string oldName, string newName, IReadOnlyCollection<Guid> expectedTaskIds, CancellationToken cancellationToken = default)
+    {
+        oldName = oldName.Trim(); newName = newName.Trim();
+        if (oldName.Length == 0 || newName.Length == 0) return 0;
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var items = await ReadUnsafeAsync(cancellationToken);
+            var members = items.Where(item => item.Section.Equals(oldName, StringComparison.OrdinalIgnoreCase)).Select(item => item.Id).ToHashSet();
+            if (!members.SetEquals(expectedTaskIds)) return null;
+            if (!oldName.Equals(newName, StringComparison.OrdinalIgnoreCase) && items.Any(item => item.Section.Equals(newName, StringComparison.OrdinalIgnoreCase))) return null;
+            var changed = 0;
             for (var i = 0; i < items.Count; i++)
             {
                 if (!items[i].Section.Equals(oldName, StringComparison.OrdinalIgnoreCase) || items[i].Section.Equals(newName, StringComparison.Ordinal)) continue;
