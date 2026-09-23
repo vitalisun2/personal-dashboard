@@ -7,6 +7,105 @@ namespace PersonalDashboard.Tests;
 public sealed class ScopedChatTests
 {
     [TestMethod]
+    public async Task ExplicitDocumentDestinationOverridesMissingOrMismatchedModelSection()
+    {
+        const string request = "Добавь документ под названием Broccoli как источник с юмрофана в раздел Здоровье";
+        foreach (var modelSection in new string?[] { null, "Работа" })
+        {
+            var health = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "section", Title = "Здоровье" };
+            var work = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "section", Title = "Работа" };
+            var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [health, work] });
+            var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store),
+                new FixedKnowledgeRouter(new KnowledgeIntent("create_document", null, "Broccoli", "Источник с юмрофана", modelSection, null)));
+
+            var preview = await facade.HandleAsync(new AC.ChatTurn(request, true, null, []), CancellationToken.None);
+
+            Assert.IsNotNull(preview.Pending, preview.Text);
+            Assert.Contains("Путь: Здоровье", preview.Text);
+            Assert.IsFalse(preview.Text.Contains("Путь: Корень базы знаний", StringComparison.Ordinal));
+            Assert.AreEqual("Здоровье", KnowledgeCommandPlanner.ReadPending(preview.Pending)?.SectionTitle);
+            Assert.AreEqual(health.Id, KnowledgeCommandPlanner.ReadPending(preview.Pending)?.ParentId);
+            Assert.AreEqual(0, store.Writes, "Preview must not write data.");
+
+            var committed = await facade.HandleAsync(new AC.ChatTurn("да", false, preview.Pending, []), CancellationToken.None);
+            Assert.IsTrue(committed.ChangedData, committed.Text);
+            Assert.IsTrue(store.Value.Nodes.Any(node => node.Title == "Broccoli" && node.ParentId == health.Id));
+            Assert.IsFalse(store.Value.Nodes.Any(node => node.Title == "Broccoli" && node.ParentId == work.Id));
+        }
+    }
+
+    [TestMethod]
+    public async Task ExplicitDocumentDestinationCreatesAbsentSectionOnlyAfterConfirmation()
+    {
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [] });
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store),
+            new FixedKnowledgeRouter(new KnowledgeIntent("create_document", null, "Broccoli", "Источник с юмрофана", null, null)));
+
+        var preview = await facade.HandleAsync(new AC.ChatTurn("Добавь документ под названием Broccoli как источник с юмрофана в раздел Здоровье", true, null, []), CancellationToken.None);
+
+        Assert.IsNotNull(preview.Pending, preview.Text);
+        Assert.Contains("Будет создан раздел «Здоровье» и документ «Broccoli» внутри него", preview.Text);
+        Assert.AreEqual(KnowledgeCommandKind.CreateSectionAndDocument, KnowledgeCommandPlanner.ReadPending(preview.Pending)?.Kind);
+        Assert.AreEqual(0, store.Writes);
+        Assert.IsEmpty(store.Value.Nodes);
+
+        var committed = await facade.HandleAsync(new AC.ChatTurn("да", false, preview.Pending, []), CancellationToken.None);
+        Assert.IsTrue(committed.ChangedData, committed.Text);
+        var section = store.Value.Nodes.Single(node => node.Kind == "section" && node.Title == "Здоровье");
+        Assert.IsTrue(store.Value.Nodes.Any(node => node.Kind == "document" && node.Title == "Broccoli" && node.ParentId == section.Id));
+    }
+
+    [TestMethod]
+    public async Task AmbiguousExplicitDestinationAsksForSectionInsteadOfPreviewingRoot()
+    {
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [] });
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store),
+            new FixedKnowledgeRouter(new KnowledgeIntent("create_document", null, "Broccoli", "Источник с юмрофана", null, null)));
+
+        foreach (var request in new[]
+        {
+            "Добавь документ Broccoli в раздел",
+            "Добавь документ Broccoli в раздел Здоровье с содержанием Текст"
+        })
+        {
+            var reply = await facade.HandleAsync(new AC.ChatTurn(request, true, null, []), CancellationToken.None);
+
+            Assert.IsTrue(reply.NeedsClarification, reply.Text);
+            Assert.Contains("Уточните точное название раздела", reply.Text);
+            Assert.AreEqual("section", KnowledgeCommandPlanner.ReadPending(reply.Pending)?.Missing);
+            Assert.IsNull(KnowledgeCommandPlanner.ReadPending(reply.Pending)?.SectionTitle);
+            Assert.AreEqual(0, store.Writes);
+        }
+    }
+
+    [TestMethod]
+    public async Task CreateDocumentWithoutNamedDestinationKeepsRootPreview()
+    {
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [] });
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store),
+            new FixedKnowledgeRouter(new KnowledgeIntent("create_document", null, "Broccoli", null, null, null)));
+
+        var preview = await facade.HandleAsync(new AC.ChatTurn("Создай документ Broccoli", true, null, []), CancellationToken.None);
+
+        Assert.Contains("Путь: Корень базы знаний", preview.Text);
+        Assert.AreEqual(0, store.Writes);
+    }
+
+    [TestMethod]
+    public async Task MissingTitleAndAmbiguousSectionCannotContinueIntoRootPreview()
+    {
+        var store = new InMemoryKnowledgeStore(new KnowledgeBase.Api.Domain.KnowledgeDocument { Nodes = [] });
+        var facade = new KnowledgeChatFacade(new KnowledgeBase.Api.Application.KnowledgeService(store),
+            new FixedKnowledgeRouter(new KnowledgeIntent("create_document", null, null, null, null, null)));
+
+        var reply = await facade.HandleAsync(new AC.ChatTurn("Создай документ в раздел", true, null, []), CancellationToken.None);
+
+        Assert.IsTrue(reply.NeedsClarification);
+        Assert.AreEqual("classification", KnowledgeCommandPlanner.ReadPending(reply.Pending)?.Missing);
+        Assert.AreEqual(0, store.Writes);
+    }
+
+    [TestMethod]
     public async Task ModelIntentSupportsKnowledgeCreationAndAtomicBatchPreview()
     {
         var section = new KnowledgeBase.Api.Domain.KnowledgeNode { Kind = "section", Title = "Здоровье" };

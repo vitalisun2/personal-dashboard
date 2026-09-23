@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Encodings.Web;
+using System.Text.RegularExpressions;
 using AgentChat;
 using KnowledgeBase.Api.Application;
 using TaskBoard;
@@ -248,6 +249,9 @@ sealed class ReadOnlyChatResponder : IChatResponder, IKnowledgeIntentRouter, ISc
 
 sealed class KnowledgeChatFacade(KnowledgeService knowledge, IChatResponder responder) : IChatConversationFacade
 {
+    private static readonly Regex SectionDestinationMarker = new(@"\bв\s+раздел(?:е)?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex PlainSectionName = new(@"\A[\p{L}\p{N}][\p{L}\p{N} _'-]*\z", RegexOptions.CultureInvariant);
+
     public ChatScope Scope => ChatScope.Knowledge;
     public Task<ChatReply> HandleAsync(string text, bool initialPrompt, CancellationToken ct) => HandleAsync(new ChatTurn(text, initialPrompt, null, []), ct);
 
@@ -295,6 +299,24 @@ sealed class KnowledgeChatFacade(KnowledgeService knowledge, IChatResponder resp
                 if (intent.Kind == "conversation") return new ChatReply(string.IsNullOrWhiteSpace(intent.Answer) ? await ReplyWithKnowledgeSnapshotAsync(turn, ct) : intent.Answer, false);
                 if (intent.Kind == "clarify") return Clarify(new(KnowledgeCommandKind.None, Missing: "classification"), string.IsNullOrWhiteSpace(intent.Question) ? "Уточните, какое действие и с каким документом выполнить." : intent.Question);
                 plan = KnowledgeCommandPlanner.FromIntent(intent);
+                if (plan.Kind == KnowledgeCommandKind.CreateDocument)
+                {
+                    var destination = ExplicitSectionDestination(turn.Text);
+                    if (destination.Mentioned)
+                    {
+                        if (destination.Title is null)
+                            return Clarify(string.IsNullOrWhiteSpace(plan.Title)
+                                ? new(KnowledgeCommandKind.None, Missing: "classification")
+                                : plan with { SectionTitle = null, Missing = "section" }, "Уточните точное название раздела для нового документа; данные не менялись.");
+                        if (destination.NeedsValidation &&
+                            !string.Equals(destination.Title, plan.SectionTitle?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+                            !(await knowledge.GetTreeAsync(ct)).SelectMany(Flatten).Any(node => node.Kind == "section" && node.Title.Equals(destination.Title, StringComparison.OrdinalIgnoreCase)))
+                            return Clarify(string.IsNullOrWhiteSpace(plan.Title)
+                                ? new(KnowledgeCommandKind.None, Missing: "classification")
+                                : plan with { SectionTitle = null, Missing = "section" }, "Уточните точное название раздела для нового документа; данные не менялись.");
+                        plan = plan with { SectionTitle = destination.Title };
+                    }
+                }
                 if ((plan.Kind is KnowledgeCommandKind.AppendContent or KnowledgeCommandKind.UpdateContentByReference) && string.IsNullOrWhiteSpace(plan.Content))
                     return Clarify(new(KnowledgeCommandKind.None, Missing: "classification"), "Не удалось определить содержание изменения. Уточните, какой текст добавить или каким должно стать содержание.");
                 if (KnowledgeCommandPlanner.HasAmbiguousPlacementVerb(turn.Text) && (plan.Kind is KnowledgeCommandKind.AppendContent or KnowledgeCommandKind.UpdateContentByReference))
@@ -304,6 +326,8 @@ sealed class KnowledgeChatFacade(KnowledgeService knowledge, IChatResponder resp
         }
         else plan = pending ?? KnowledgeCommandPlanner.Plan(turn.Text);
         if (plan.Kind == KnowledgeCommandKind.None) return new ChatReply(await ReplyWithKnowledgeSnapshotAsync(turn, ct), false);
+        if (plan.Kind == KnowledgeCommandKind.CreateDocument && string.IsNullOrWhiteSpace(plan.Title))
+            return Clarify(plan with { Missing = "title" }, MissingMessage("title"));
         if (plan.Missing is not null) return Clarify(plan, MissingMessage(plan.Missing));
 
         if (plan.Kind is KnowledgeCommandKind.AppendContent or KnowledgeCommandKind.UpdateContentByReference)
@@ -447,6 +471,24 @@ sealed class KnowledgeChatFacade(KnowledgeService knowledge, IChatResponder resp
     }
 
     private static ChatReply Clarify(KnowledgeCommand command, string message) => new(message, true, false, new ChatPending("knowledge-command", JsonSerializer.Serialize(command)));
+
+    private static (bool Mentioned, string? Title, bool NeedsValidation) ExplicitSectionDestination(string text)
+    {
+        var markers = SectionDestinationMarker.Matches(text);
+        if (markers.Count == 0) return (false, null, false);
+        if (markers.Count != 1) return (true, null, false);
+
+        var tail = text[(markers[0].Index + markers[0].Length)..].Trim().TrimEnd('.', '!', '?').Trim();
+        if (tail.Length is 0 or > 80 || tail.Contains('\n') || tail.Contains('\r')) return (true, null, false);
+        if (tail.Length >= 2 && (tail[0], tail[^1]) is ('«', '»') or ('"', '"'))
+        {
+            var quotedTitle = tail[1..^1].Trim();
+            return (true, quotedTitle.Length > 0 ? quotedTitle : null, false);
+        }
+        if (!PlainSectionName.IsMatch(tail)) return (true, null, false);
+
+        return (true, tail, tail.Any(char.IsWhiteSpace));
+    }
     private static ChatReply Preview(KnowledgeCommand command, string text)
     {
         var previous = command.Missing == "approval" ? command.Preview : null;
