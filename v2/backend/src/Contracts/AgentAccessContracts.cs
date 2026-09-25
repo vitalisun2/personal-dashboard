@@ -5,8 +5,46 @@ namespace PersonalDashboard.V2.Contracts.AgentAccess;
 // Every member affected by a reorder is checked again at confirmation time.
 public sealed record VersionedEntityId(Guid Id, long ExpectedVersion);
 
+public enum KnowledgeNodeKind { Section, Document }
+public enum KnowledgeMutationKind { Create, Update, Move, Archive, Restore, Delete, Reorder }
+
+public sealed record KnowledgeNodeState(
+    KnowledgeNodeKind Kind,
+    Guid Id,
+    Guid? ParentSectionId,
+    long Version,
+    string Title,
+    string? Markdown,
+    string Path,
+    bool Archived,
+    int Position);
+
+public sealed record KnowledgeMutation(
+    KnowledgeMutationKind Operation,
+    KnowledgeNodeKind Kind,
+    Guid Id,
+    long? ExpectedVersion,
+    Guid? ParentSectionId = null,
+    string? Title = null,
+    string? Markdown = null,
+    IReadOnlyList<VersionedEntityId>? Order = null);
+
+public sealed record KnowledgeMutationResult(bool Applied, KnowledgeNodeState? Current, string? ConflictReason);
+
+public interface IKnowledgeAgentAccess
+{
+    Task<KnowledgeNodeState?> ReadAsync(
+        KnowledgeNodeKind kind,
+        Guid id,
+        CancellationToken cancellationToken = default);
+
+    Task<KnowledgeMutationResult> ApplyAsync(
+        KnowledgeMutation mutation,
+        CancellationToken cancellationToken = default);
+}
+
 public enum PlanningEntityKind { Project, Milestone, Feature }
-public enum PlanningMutationKind { Create, Update, Archive, Restore, Delete, SetFeatureCompletion, Reorder }
+public enum PlanningMutationKind { Create, Update, Archive, Restore, Delete, SetFeatureStatus, Reorder }
 
 public sealed record PlanningEntityState(
     PlanningEntityKind Kind,
@@ -16,7 +54,7 @@ public sealed record PlanningEntityState(
     long Version,
     string Title,
     string? Description,
-    bool? FeatureCompleted,
+    string? FeatureStatus,
     bool Archived,
     int Position);
 
@@ -29,7 +67,7 @@ public sealed record PlanningMutation(
     long? ExpectedVersion,
     string? Title = null,
     string? Description = null,
-    bool? FeatureCompleted = null,
+    string? FeatureStatus = null,
     IReadOnlyList<VersionedEntityId>? Order = null);
 
 public sealed record PlanningMutationResult(bool Applied, PlanningEntityState? Current, string? ConflictReason);
