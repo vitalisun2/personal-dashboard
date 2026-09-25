@@ -1,37 +1,6 @@
-.planning-page { --plan-surface:#18242f; --plan-surface2:#202d39; --plan-line:#293744; --plan-muted:#91a2b6; color:#f3f6fa; }
-.planning-toolbar,.list-heading,.planning-row,.progress-card>div:first-child { display:flex;align-items:center;gap:8px }
-.planning-toolbar { margin:20px 0 14px;position:relative }
-.project-picker { flex:1;min-width:0 }
-.project-picker select { width:100%;height:48px;border:0;border-radius:12px;padding:0 14px;background:linear-gradient(90deg,#18242f,#202d39);color:#eef3f8;font-family:inherit;font-size:14px;font-weight:650 }
-.planning-primary,.planning-quiet { min-height:38px;padding:0 11px;border:1px solid #2b3c4a;border-radius:10px;background:#18242f;color:#cbd8e6;font-size:12px;font-weight:650;cursor:pointer }
-.planning-primary { background:#284a72;color:#e4efff;border-color:#345b86 }
-.planning-editor { display:grid;gap:12px;margin:0 0 14px;padding:14px;border:1px solid #304455;border-radius:14px;background:#18242f }
-.planning-editor label { display:grid;gap:6px;color:#91a2b6;font-size:12px }
-.planning-editor input,.planning-editor textarea,.planning-editor select { width:100%;border:1px solid #344858;border-radius:9px;padding:10px;background:#101920;color:#f3f6fa;font:inherit }
-.planning-editor>div { display:flex;justify-content:flex-end;gap:8px }
-.progress-card { margin:2px 2px 16px;padding:2px 0 13px;border:0;background:transparent }
-.progress-card>div:first-child { justify-content:space-between;margin-bottom:8px;color:#91a2b6;font-size:11px;font-weight:650 }
-.progress-card strong { color:#b9d2f4;font-size:13px }
-.progress-track { height:5px;overflow:hidden;border-radius:99px;background:#2a3743 }
-.progress-track span { display:block;height:100%;border-radius:inherit;background:#6f94d8 }
-.progress-card small { display:block;margin-top:8px;color:#7e91a7;font-size:11px }
-.list-heading { position:relative;flex-wrap:wrap;justify-content:center;min-height:34px;margin:10px 2px 12px }
-.list-heading h2 { flex:1;margin:0;color:#8ea0b3;text-align:center;font-size:12px;letter-spacing:.02em }
-.list-heading .planning-quiet { min-height:30px;padding:0 9px;background:#18242f;font-size:11px;white-space:nowrap }
-.planning-row { position:relative;min-height:56px;margin:0;padding:6px 2px;border:0;border-radius:12px;background:transparent;cursor:pointer }
-.planning-row:hover { background:rgba(255,255,255,.025) }
-.row-open { flex:1;min-width:0;overflow:hidden;padding:7px 0;border:0;background:transparent;color:#edf2f7;text-align:left;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:680;cursor:pointer }
-.row-progress { display:grid;width:76px;gap:5px;color:#a9bdd5;text-align:right;font-size:12px }
-.row-progress .progress-track { height:4px }
-.row-arrow { color:#91a2b6;font-size:18px }
-.feature-status,.task-placement { padding:5px 8px;border-radius:20px;background:#202d39;color:#91a2b6;font-size:11px }
-.feature-status.active { background:#243342;color:#aeb7ef }.feature-status.done { background:#20352e;color:#8dccaa }
-.feature-status-control { display:flex;align-items:center;gap:10px;margin:14px 0 22px;color:#91a2b6;font-size:12px }
-.feature-status-control select { min-height:38px;border:1px solid #344858;border-radius:9px;padding:7px 10px;background:#18242f;color:#f3f6fa }
-.feature-heading { align-items:flex-end }.feature-heading>div { flex:1;min-width:0 }.feature-heading .eyebrow { margin:0 0 6px;color:#74869a;font-size:11px }.feature-heading h2 { margin:0;color:#f3f6fa;font-size:22px }
-.planning-back { margin:15px 0 11px;padding:7px 0;border:0;background:transparent;color:#b9d2f4;font:inherit;text-align:left;cursor:pointer }
-.planning-empty { min-height:80px;padding:20px 6px 6px;color:#7f93a6;font-size:13px;line-height:1.45 }
-.planning-error { margin:12px 0;padding:11px 13px;border-radius:10px;background:#382327;color:#e6a3aa;font-size:13px }.planning-error button { float:right;border:0;background:transparent;color:inherit }
-.task-plan-row { cursor:default }.planning-drag-handle { cursor:grab;touch-action:none }.planning-drag-handle:active { cursor:grabbing }
-.planning-context-actions { position:absolute;right:6px;bottom:calc(100% + 5px);z-index:8;display:flex;flex-wrap:wrap;gap:7px;width:max-content;max-width:min(95vw,420px);padding:8px;border:1px solid #35495b;border-radius:12px;background:#18242f;box-shadow:0 8px 24px #0006 }
-@media(max-width:700px){.planning-row{flex-wrap:wrap}.planning-row .row-open{flex-basis:100%}.row-progress{flex:1}.feature-heading{align-items:flex-start}.planning-toolbar{gap:6px}.planning-toolbar>.planning-quiet{padding:0 8px}}
+/* Planning page — module-specific styles only.
+   The mockup .planning-* theme (toolbar, picker, rows, detail, sheet, order mode,
+   context menu, confirm layer) lives in shared/styles.css under .phone-shell. */
+.planning-section.planning-page { position: static; }
+.planning-error { display: flex; align-items: center; gap: 10px; margin: 12px 0 4px; padding: 11px 13px; border-radius: 10px; background: #382327; color: #e6a3aa; font-size: 13px; line-height: 1.45 }
+.planning-error button { flex: none; margin-left: auto; padding: 2px 6px; border: 0; background: transparent; color: inherit; font-size: 15px; line-height: 1; cursor: pointer }
