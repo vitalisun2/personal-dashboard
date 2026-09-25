@@ -38,7 +38,10 @@ public sealed record ChatProposedAction(
     Guid EntityId,
     string Operation,
     long? ExpectedVersion,
-    JsonElement Payload);
+    JsonElement Payload,
+    string Label,
+    JsonElement? Before,
+    JsonElement? After);
 
 public enum ChatProposalState { Pending, Applied, Dismissed }
 
@@ -76,6 +79,8 @@ public interface IChatConversationStore
     Task AppendTurnAsync(ChatTurn turn, CancellationToken cancellationToken = default);
 
     Task<ChatProposal?> GetProposalAsync(Guid id, CancellationToken cancellationToken = default);
+
+    Task<ChatProposal?> GetProposalForTurnAsync(Guid turnId, CancellationToken cancellationToken = default);
 
     Task SaveProposalAsync(ChatProposal proposal, CancellationToken cancellationToken = default);
 
