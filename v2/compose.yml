@@ -18,6 +18,7 @@ services:
       ConnectionStrings__PersonalOsV2: "Host=db;Port=5432;Database=personal_os_v2;Username=personal_os_v2;Password=${V2_DB_PASSWORD:?Set V2_DB_PASSWORD in a V2-only environment file}"
       OLLAMA_URL: "${V2_OLLAMA_URL:-http://host.docker.internal:11434}"
       OLLAMA_CHAT_MODEL: "${V2_GEMMA_MODEL:-gemma4:e4b-it-qat}"
+      OLLAMA_EMBED_MODEL: "${V2_EMBED_MODEL:-embeddinggemma}"
       OPENROUTER_URL: "${V2_OPENROUTER_URL:-https://openrouter.ai/api/v1}"
       OPENROUTER_MODEL: "${V2_DEEPSEEK_MODEL:-deepseek/deepseek-v4-flash-0731}"
       OPENROUTER_API_KEY_FILE: /run/secrets/openrouter-api-key
