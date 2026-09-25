@@ -20,3 +20,15 @@ public interface ITaskPlanningProjectionRefresh
 {
     Task RefreshAsync(PlanningLink changedAncestor, CancellationToken cancellationToken = default);
 }
+
+public sealed record PlanningPath(
+    string ProjectTitle,
+    string? MilestoneTitle,
+    string? FeatureTitle,
+    string Path,
+    string? Url);
+
+public interface IPlanningPathReader
+{
+    Task<PlanningPath?> ReadPathAsync(PlanningLink link, CancellationToken cancellationToken = default);
+}
