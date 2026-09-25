@@ -5,11 +5,17 @@ namespace PersonalDashboard.V2.Contracts.Chat;
 
 public sealed record ChatConversationState(Guid Id, string? Title, DateTimeOffset CreatedAtUtc);
 
+public sealed record ChatConversationSummary(Guid Id, string? Title, DateTimeOffset UpdatedAtUtc, long TurnCount);
+
+public sealed record ChatConversationPage(IReadOnlyList<ChatConversationSummary> Conversations, string? NextCursor);
+
 public sealed record ChatTurnScope(
     string Mode,
     string? EntityType,
     Guid? EntityId,
     long? EntityVersion);
+
+public enum ChatModelRoute { Default, ManualSelection, AutomaticFallback }
 
 public sealed record ChatTurn(
     Guid Id,
@@ -19,8 +25,11 @@ public sealed record ChatTurn(
     ChatTurnScope Scope,
     string RequestedModel,
     string ActualModel,
+    ChatModelRoute ModelRoute,
     IReadOnlyList<SearchSourceReference> Sources,
     DateTimeOffset CreatedAtUtc);
+
+public sealed record ChatTurnPage(IReadOnlyList<ChatTurn> Turns, string? NextCursor);
 
 // Payload is the exact versioned action displayed in the preview, not model prose.
 public sealed record ChatProposedAction(
@@ -48,9 +57,20 @@ public interface IChatConversationStore
 
     Task<ChatConversationState> CreateConversationAsync(Guid id, string? title, CancellationToken cancellationToken = default);
 
+    Task<ChatConversationPage> ListConversationsAsync(
+        string? cursor,
+        int pageSize,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<ChatTurn>> GetRecentTurnsAsync(
         Guid conversationId,
         int limit,
+        CancellationToken cancellationToken = default);
+
+    Task<ChatTurnPage> GetTurnsPageAsync(
+        Guid conversationId,
+        string? cursor,
+        int pageSize,
         CancellationToken cancellationToken = default);
 
     Task AppendTurnAsync(ChatTurn turn, CancellationToken cancellationToken = default);
@@ -58,6 +78,8 @@ public interface IChatConversationStore
     Task<ChatProposal?> GetProposalAsync(Guid id, CancellationToken cancellationToken = default);
 
     Task SaveProposalAsync(ChatProposal proposal, CancellationToken cancellationToken = default);
+
+    Task<int> DismissPendingProposalsAsync(Guid conversationId, CancellationToken cancellationToken = default);
 
     // Call within ITransactionRunner so proposal state and domain writes commit together.
     Task<bool> TryChangeProposalStateAsync(
