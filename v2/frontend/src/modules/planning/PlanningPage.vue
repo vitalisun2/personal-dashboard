@@ -155,7 +155,7 @@ async function cacheRows(type: string, rows: Array<{ id: string; version: number
     const payload = op.payload as { projectId?: string } | undefined
     if (op.type === 'planning.milestone' || op.type === 'planning.feature') if (payload?.projectId) affected.add(payload.projectId)
   }
-  await Promise.all(rows.filter(row => force || !affected.has(row.id)).map(row => store.putEntity({ type: `${type}.view`, id: row.id, version: row.version, payload: row, deleted: false, updatedAt: now })))
+  await Promise.all(rows.filter(row => force || !affected.has(row.id)).map(row => store.putEntity({ type: `${type}.view`, id: row.id, version: row.version, payload: JSON.parse(JSON.stringify(row)), deleted: false, updatedAt: now })))
 }
 async function cachedRows<T>(type: string): Promise<T[]> {
   const rows = await (await getOfflineStore()).listEntities(`${type}.view`)
@@ -164,15 +164,15 @@ async function cachedRows<T>(type: string): Promise<T[]> {
 async function refresh() {
   state.busy = true; state.error = ''
   try {
-    try {
-      state.projects = await request<Project[]>(api, `/projects?includeArchived=${state.showArchived}`)
-      await cacheRows('planning.project', state.projects)
-      for (const p of state.projects) {
-        await cacheRows('planning.milestone', p.milestones)
-        for (const m of p.milestones) await cacheRows('planning.feature', m.features)
-      }
-      const lists = await Promise.all(['Planned', 'Backlog', 'Today'].map(location => request<Task[]>(taskApi, `?location=${location}`)))
-      state.tasks = lists.flat(); await cacheRows('tasks.task', state.tasks)
+      try {
+        state.projects = await request<Project[]>(api, `/projects?includeArchived=${state.showArchived}`)
+        await cacheRows('planning.project', state.projects)
+        for (const p of state.projects) {
+          await cacheRows('planning.milestone', p.milestones)
+          for (const m of p.milestones) await cacheRows('planning.feature', m.features)
+        }
+        const lists = await Promise.all(['Planned', 'Backlog', 'Today'].map(location => request<Task[]>(taskApi, `?location=${location}`)))
+        state.tasks = lists.flat(); await cacheRows('tasks.task', state.tasks)
       const store = await getOfflineStore(), pending = await store.listPendingOperations(), localProjects = await cachedRows<Project>('planning.project'), localTasks = await cachedRows<Task>('tasks.task')
       const localProjectById = new Map(localProjects.map(item => [item.id, item])), affectedProjects = new Set<string>(), deletedProjects = new Set<string>(), affectedTasks = new Set<string>()
       for (const op of pending) {
@@ -215,16 +215,22 @@ async function saveEditor() {
 }
 async function save() {
   const title = state.title.trim(); if (!title) return
-  try {
-    if (state.createType === 'project') await request(api, '/projects', { method: 'POST', body: JSON.stringify({ title, description: state.description }) })
-    else if (state.createType === 'milestone' && project.value) await request(api, `/projects/${project.value.id}/milestones`, { method: 'POST', body: JSON.stringify({ expectedParentVersion: project.value.version, title, description: state.description }) })
-    else if (state.createType === 'feature' && project.value && milestone.value) await request(api, `/projects/${project.value.id}/milestones/${milestone.value.id}/features`, { method: 'POST', body: JSON.stringify({ expectedParentVersion: milestone.value.version, title, description: state.description }) })
+  let createdProjectId: string | null = null
+    let createdMilestoneId: string | null = null
+    let createdFeatureId: string | null = null
+    try {
+      if (state.createType === 'project') { const created = await request<{ id: string }>(api, '/projects', { method: 'POST', body: JSON.stringify({ title, description: state.description }) }); createdProjectId = created.id }
+      else if (state.createType === 'milestone' && project.value) { const created = await request<{ id: string }>(api, `/projects/${project.value.id}/milestones`, { method: 'POST', body: JSON.stringify({ expectedParentVersion: project.value.version, title, description: state.description }) }); createdMilestoneId = created.id }
+      else if (state.createType === 'feature' && project.value && milestone.value) { const created = await request<{ id: string }>(api, `/projects/${project.value.id}/milestones/${milestone.value.id}/features`, { method: 'POST', body: JSON.stringify({ expectedParentVersion: milestone.value.version, title, description: state.description }) }); createdFeatureId = created.id }
     else if (state.editType === 'project' && editProject.value) await request(api, `/projects/${editProject.value.id}`, { method: 'PUT', body: JSON.stringify({ expectedVersion: editProject.value.version, title, description: state.description }) })
     else if (state.editType === 'milestone' && project.value && editMilestone.value) await request(api, `/projects/${project.value.id}/milestones/${editMilestone.value.id}`, { method: 'PUT', body: JSON.stringify({ expectedVersion: editMilestone.value.version, title, description: state.description }) })
     else if (state.editType === 'feature' && project.value && editFeature.value) await request(api, `/projects/${project.value.id}/milestones/${editFeature.value.milestone.id}/features/${editFeature.value.feature.id}`, { method: 'PUT', body: JSON.stringify({ expectedVersion: editFeature.value.feature.version, title, description: state.description }) })
     else if (state.editType === 'task') { const item = state.tasks.find(t => t.id === state.editId); if (item) await updateTask(item, { title, description: state.description }) }
     state.createType = ''; state.editType = ''; await refresh()
-  } catch (error) {
+        if (createdProjectId && !route.path.startsWith(`/planning/projects/${createdProjectId}`)) await router.replace(`/planning/projects/${createdProjectId}`)
+        if (createdMilestoneId && project.value) await router.push(`/planning/projects/${project.value.id}/milestones/${createdMilestoneId}`)
+        else if (createdFeatureId && project.value && milestone.value) await router.push(`/planning/projects/${project.value.id}/milestones/${milestone.value.id}/features/${createdFeatureId}`)
+      } catch (error) {
     if (error instanceof TypeError) {
       const kind = state.editType || state.createType
       if (state.editType) {
@@ -745,7 +751,7 @@ onBeforeUnmount(onUnmountedCleanup)
     </div>
 
     <div v-if="state.createType || state.editType" class="overlay open" @click="closeEditor"></div>
-    <section v-if="state.createType || state.editType" class="sheet planning-sheet" aria-label="Редактор планирования">
+    <section v-if="state.createType || state.editType" class="sheet planning-sheet open" aria-label="Редактор планирования">
       <div class="sheet-head"><div class="sheet-title">{{ sheetTitle }}</div><button class="sheet-close" type="button" aria-label="Закрыть" @click="closeEditor">×</button></div>
       <div class="planning-sheet-context"></div>
       <label class="planning-field-label" for="planning-name">Название</label>
