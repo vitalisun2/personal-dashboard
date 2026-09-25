@@ -362,17 +362,7 @@ function resultPath(hit: SearchHit): string {
 
 <template>
   <section id="knowledgeFX" class="knowledge-section" aria-label="База знаний">
-    <div class="knowledge-sync" role="status">
-      <span>{{ syncStatus === 'offline' || !isOnline ? 'Офлайн: локальная копия' : syncStatus === 'syncing' ? 'Синхронизация…' : syncStatus === 'error' ? 'Ошибка синхронизации' : conflicts ? 'Нужна проверка конфликта' : pendingCount ? 'Ожидает синхронизации' : 'Синхронизировано' }}</span>
-      <span v-if="pendingCount">{{ pendingCount }} в очереди</span>
-      <button type="button" :disabled="!isOnline || syncStatus === 'syncing'" @click="retrySync">Повторить</button>
-    </div>
-    <p v-if="error" class="knowledge-error" role="alert">{{ error }}</p>
-    <section v-if="conflicts" class="knowledge-conflict" aria-live="polite">
-      <strong>Есть {{ conflicts }} конфликт(а) синхронизации</strong>
-      <p>Локальные изменения сохранены. Проверьте документ перед повторным изменением.</p>
-      <ul><li v-for="conflict in conflictItems" :key="conflict.operationId">{{ (conflict.localPayload as KnowledgeNode | null)?.title || conflict.id }} — {{ conflict.conflictReason || 'Версия на сервере изменилась' }}</li></ul>
-    </section>
+      <p v-if="error" class="knowledge-error" role="alert">{{ error }}</p>
 
     <div v-if="document" id="docFX" class="scroll">
       <div class="doc-detail-top">

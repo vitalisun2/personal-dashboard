@@ -457,7 +457,7 @@ function rowPointerDown(event: PointerEvent, kind: string, id: string) {
       openContextMenu(kind, id, contextTarget.row, null)
     }, 480)
   }
-  try { (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId) } catch { /* ignore */ }
+  try { (event.target as HTMLElement).setPointerCapture?.(event.pointerId) } catch { /* ignore */ }
 }
 function rowPointerMove(event: PointerEvent) {
   const current = contextTarget; if (!current || current.pointerId !== event.pointerId) return

@@ -45,7 +45,7 @@ public sealed class AgentTurnService(
     private static readonly ModelTool[] Tools =
     [
         new("search_app", "Search current application data and optionally prior chat discussions.", """
-        {"type":"object","properties":{"query":{"type":"string"},"exhaustive":{"type":"boolean"},"includeHistory":{"type":"boolean"}},"required":["query"],"additionalProperties":false}
+        {"type":"object","properties":{"query":{"type":"string"},"exhaustive":{"type":"boolean"}},"required":["query"],"additionalProperties":false}
         """),
         new("get_current_entity", "Read one current document, plan item, task, or task section by exact type and ID.", """
         {"type":"object","properties":{"entityType":{"type":"string"},"entityId":{"type":"string","format":"uuid"}},"required":["entityType","entityId"],"additionalProperties":false}
@@ -124,10 +124,8 @@ public sealed class AgentTurnService(
         var root = json.RootElement;
         var query = RequiredString(root, "query");
         var exhaustive = root.TryGetProperty("exhaustive", out var exhaustiveValue) && exhaustiveValue.GetBoolean();
-        var includeHistory = root.TryGetProperty("includeHistory", out var historyValue) && historyValue.GetBoolean();
         var kinds = new List<string> { "knowledge.document", "knowledge.section", "planning.project", "planning.milestone", "planning.feature", "tasks.task", "tasks.section" };
-        if (includeHistory) kinds.Add("chat.turn");
-        var context = request.Scope.Mode.Equals("entity", StringComparison.OrdinalIgnoreCase) && request.Scope.EntityId is not null
+                var context = request.Scope.Mode.Equals("entity", StringComparison.OrdinalIgnoreCase) && request.Scope.EntityId is not null
             ? new SearchChatFilter(EntityId: request.Scope.EntityId, EntityType: request.Scope.EntityType)
             : null;
         var pages = new List<SearchResponse>();

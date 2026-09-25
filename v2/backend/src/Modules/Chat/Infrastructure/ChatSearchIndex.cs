@@ -10,8 +10,9 @@ namespace PersonalDashboard.V2.Chat.Infrastructure;
 internal sealed class ChatSearchIndex(PlatformDbContext dbContext, ISearchIndexer indexer) : ISearchSourceFeed
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    // История чата не индексируется в поиск (до прояснения сценариев использования).
     public Task PublishCompletedTurnAsync(ChatTurn turn, string? conversationTitle, CancellationToken cancellationToken = default) =>
-        indexer.UpsertAsync(ToSource(turn, conversationTitle), cancellationToken);
+        Task.CompletedTask;
 
     public async Task<SearchSourcePage> ReadPageAsync(string? cursor, int pageSize, CancellationToken cancellationToken = default)
     {
@@ -28,8 +29,8 @@ internal sealed class ChatSearchIndex(PlatformDbContext dbContext, ISearchIndexe
             .Take(pageSize + 1).ToListAsync(cancellationToken);
         var hasMore = rows.Count > pageSize;
         if (hasMore) rows.RemoveAt(rows.Count - 1);
-        var changes = rows.Select(x => new SearchSourceChange("chat.turn", x.Turn.Id, 1, false,
-            ToSource(ToContract(x.Turn), x.Conversation.Title))).ToArray();
+        // Чатовые источники исключены из поискового индекса.
+        var changes = new SearchSourceChange[0];
         var next = hasMore && rows.Count > 0 ? EncodeCursor(rows[^1].Turn.Id) : null;
         return new SearchSourcePage(changes, next, !hasMore);
     }

@@ -642,6 +642,10 @@ async function refresh() {
     tasks = tasks.filter(task => !changedTasks.has(task.id)).concat(cachedTasks.filter(task => changedTasks.has(task.id) && String(task.location).toLowerCase() === location.value.toLowerCase()))
     sections = sections.filter(section => !changedSections.has(section.id)).concat(cachedSections.filter(section => changedSections.has(section.id) && String(section.location).toLowerCase() === location.value.toLowerCase()))
     state.tasks = tasks; state.sections = sections
+        if (!state.archive) {
+          for (const section of sections) state.expanded[state.bucket].add(`section:${section.id}`)
+          for (const g of linkedGroups.value) state.expanded[state.bucket].add(`project:${g.projectId}`)
+        }
     if (!state.archive) {
       try { state.projects = await fetch('/api/v2/planning/projects?includeArchived=false').then(response => response.ok ? response.json() as Promise<ProjectLabel[]> : []); await cacheRows('planning.project', state.projects.map(x => ({ ...x, version: 0 }))) }
       catch { const rows = await (await getOfflineStore()).listEntities('planning.project.view'); state.projects = rows.filter(x => !x.deleted).map(x => x.payload as ProjectLabel) }
