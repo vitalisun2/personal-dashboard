@@ -58,7 +58,14 @@ export async function syncPendingOperations(
       throw new Error("Sync transport returned push results in an unexpected order");
     }
     if (result.applied) {
-      if (result.current) await store.putEntity(result.current);
+      // A second edit may have been queued while this push was in flight.
+      // Keep its optimistic value instead of writing the older server echo.
+      const hasNewerLocalEdit = (await store.listPendingOperations()).some(pending =>
+        pending.operationId !== operation.operationId
+        && pending.type === operation.type
+        && pending.id === operation.id,
+      );
+      if (result.current && !hasNewerLocalEdit) await store.putEntity(result.current);
       await store.removeOperation(operation.operationId);
       summary.applied++;
     } else if (!result.skipped) {
