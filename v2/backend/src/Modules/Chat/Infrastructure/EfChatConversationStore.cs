@@ -78,6 +78,18 @@ internal sealed class EfChatConversationStore(PlatformDbContext dbContext) : ICh
         return new ChatTurnPage(rows.Select(ToContract).ToArray(), next);
     }
 
+    public async Task DeleteConversationAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var proposals = await dbContext.Set<ChatProposalRow>().Where(row => row.ConversationId == id).ToArrayAsync(cancellationToken);
+        var turns = await dbContext.Set<ChatTurnRow>().Where(row => row.ConversationId == id).ToArrayAsync(cancellationToken);
+        var conversation = await dbContext.Set<ChatConversationRow>().SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (conversation is null) return;
+        foreach (var proposal in proposals) dbContext.Remove(proposal);
+        foreach (var turn in turns) dbContext.Remove(turn);
+        dbContext.Remove(conversation);
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task AppendTurnAsync(ChatTurn turn, CancellationToken cancellationToken = default)
     {
         var conversation = await dbContext.Set<ChatConversationRow>().SingleOrDefaultAsync(x => x.Id == turn.ConversationId, cancellationToken)

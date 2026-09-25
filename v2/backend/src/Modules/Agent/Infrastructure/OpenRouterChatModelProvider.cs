@@ -28,6 +28,8 @@ public sealed class OpenRouterChatModelProvider(IHttpClientFactory clients, ICon
             model = configuration["OPENROUTER_MODEL"] ?? "deepseek/deepseek-v4-flash-0731",
             messages = request.Messages.Select(ToOpenAiMessage),
             tools = request.Tools.Select(ToOpenAiTool).ToArray(),
+            temperature = 0.1,
+            max_tokens = 700,
             stream = false
         }, options: JsonOptions);
 

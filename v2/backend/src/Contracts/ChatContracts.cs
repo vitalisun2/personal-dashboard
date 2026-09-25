@@ -66,6 +66,8 @@ public interface IChatConversationStore
         int pageSize,
         CancellationToken cancellationToken = default);
 
+    Task DeleteConversationAsync(Guid id, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<ChatTurn>> GetRecentTurnsAsync(
         Guid conversationId,
         int limit,

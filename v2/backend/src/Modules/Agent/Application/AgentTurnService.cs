@@ -42,7 +42,7 @@ public sealed class AgentTurnService(
 {
     private const int MaxToolRounds = 4;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private static readonly ModelTool[] Tools =
+        private static readonly ModelTool[] Tools =
     [
         new("search_app", "Search current application data and optionally prior chat discussions.", """
         {"type":"object","properties":{"query":{"type":"string"},"exhaustive":{"type":"boolean"}},"required":["query"],"additionalProperties":false}
@@ -50,9 +50,120 @@ public sealed class AgentTurnService(
         new("get_current_entity", "Read one current document, plan item, task, or task section by exact type and ID.", """
         {"type":"object","properties":{"entityType":{"type":"string"},"entityId":{"type":"string","format":"uuid"}},"required":["entityType","entityId"],"additionalProperties":false}
         """),
-        new("propose_changes", "Prepare a structured package of changes for user review. This never writes data.", """
-        {"type":"object","properties":{"changes":{"type":"array","minItems":1,"items":{"type":"object","properties":{"module":{"type":"string","enum":["Knowledge","Planning","Tasks"]},"operation":{"type":"string","enum":["Create","Update","Move","Archive","Restore","Delete","SetWorkStatus","SetFeatureStatus","Reorder"]},"entityType":{"type":"string"},"entityId":{"type":"string","format":"uuid"},"expectedVersion":{"type":"integer","minimum":1},"after":{"type":"object"}},"required":["module","operation","entityType","entityId","after"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}
-        """)
+        new("propose_changes", "Prepare a structured package of changes for user review. This never writes data. For Create operations entityId is NOT required - the server assigns one; instead give the title and, when the new entity must live inside another one, name the parent by its exact title in after.parent_section_title / after.project_title / after.milestone_title / after.feature_title / after.section_title. The server resolves a parent named by title. For Update, Move, Archive, Restore, Delete, SetWorkStatus, SetFeatureStatus and Reorder operations entityId of the existing object is required along with its exact expectedVersion.", """
+        {
+            "type": "object",
+            "properties": {
+                "changes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "module": {
+                                "type": "string",
+                                "enum": [
+                                    "Knowledge",
+                                    "Planning",
+                                    "Tasks"
+                                ]
+                            },
+                            "operation": {
+                                "type": "string",
+                                "enum": [
+                                    "Create",
+                                    "Update",
+                                    "Move",
+                                    "Archive",
+                                    "Restore",
+                                    "Delete",
+                                    "SetWorkStatus",
+                                    "SetFeatureStatus",
+                                    "Reorder"
+                                ]
+                            },
+                            "entityType": {
+                                "type": "string"
+                            },
+                            "entityId": {
+                                "type": "string",
+                                "format": "uuid"
+                            },
+                            "expectedVersion": {
+                                "type": "integer",
+                                "minimum": 1
+                            },
+                            "after": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {
+                                        "type": "string"
+                                    },
+                                    "markdown": {
+                                        "type": "string"
+                                    },
+                                    "description": {
+                                        "type": "string"
+                                    },
+                                    "parent_section_title": {
+                                        "type": "string"
+                                    },
+                                    "section_title": {
+                                        "type": "string"
+                                    },
+                                    "project_title": {
+                                        "type": "string"
+                                    },
+                                    "milestone_title": {
+                                        "type": "string"
+                                    },
+                                    "feature_title": {
+                                        "type": "string"
+                                    },
+                                    "placement": {
+                                        "type": "string",
+                                        "enum": [
+                                            "planned",
+                                            "backlog",
+                                            "today"
+                                        ]
+                                    },
+                                    "work_status": {
+                                        "type": "string",
+                                        "enum": [
+                                            "new",
+                                            "in_progress",
+                                            "done"
+                                        ]
+                                    },
+                                    "feature_status": {
+                                        "type": "string",
+                                        "enum": [
+                                            "planned",
+                                            "active",
+                                            "done"
+                                        ]
+                                    }
+                                },
+                                "additionalProperties": true
+                            }
+                        },
+                        "required": [
+                            "module",
+                            "operation",
+                            "entityType",
+                            "after"
+                        ],
+                        "additionalProperties": true
+                    }
+                }
+            },
+            "required": [
+                "changes"
+            ],
+            "additionalProperties": false
+        }
+        """),
     ];
 
     public async Task<AgentTurnResult> RespondAsync(AgentTurnRequest request, CancellationToken cancellationToken = default)
@@ -61,14 +172,14 @@ public sealed class AgentTurnService(
         var resolvedScope = await ResolveScopeAsync(request.Scope, cancellationToken);
         var messages = new List<ModelMessage>
         {
-            new("system", "You are the Personal OS assistant. Answer general topics normally. For application facts, use search_app and get_current_entity; cite returned sources. Copy source titles and snippets exactly; never invent them. Search history is historical discussion, never current state. If search says coverage is incomplete or notes limits, say the results are partial and do not claim you found everything. Never claim a write happened. For edits, call propose_changes with exact IDs, expected versions, complete new values, and fully qualified entity types such as knowledge.document; for a focused entity use its exact scope type and ID. The server will show one preview per object and wait for explicit confirmation. If unsure which object or value the user means, ask a question instead. The active scope is " + FormatScope(resolvedScope) + "."),
+            new("system", "You are the Personal OS assistant. For writes (create/edit/move/archive/restore/delete or status changes on knowledge sections and documents, planning projects/milestones/features, tasks and task sections) call propose_changes with full values; the user confirms before anything is written. For facts use search_app or get_current_entity and quote source titles exactly; never invent data. If the request is ambiguous, ask one short clarifying question. Active scope: general."),
         };
         if (resolvedScope.Mode == "entity")
         {
             var entity = await ReadCurrentByTypeAsync(resolvedScope.EntityType!, resolvedScope.EntityId!.Value, cancellationToken);
             messages.Add(new ModelMessage("system", "Current focused entity data at version " + resolvedScope.EntityVersion + ": " + JsonSerializer.Serialize(entity, JsonOptions)));
         }
-        messages.AddRange(request.RecentMessages.TakeLast(20));
+        messages.AddRange(request.RecentMessages.TakeLast(10));
         if (messages.Count == 1 || messages[^1].Role != "user" || messages[^1].Content != request.Prompt)
             messages.Add(new ModelMessage("user", request.Prompt));
 
@@ -191,14 +302,21 @@ public sealed class AgentTurnService(
             var module = Enum.Parse<ChangeModule>(RequiredString(item, "module"), ignoreCase: true);
             var operation = Enum.Parse<ChangeOperation>(RequiredString(item, "operation"), ignoreCase: true);
             var entityType = NormalizeEntityType(module, RequiredString(item, "entityType"));
-            var id = Guid.Parse(RequiredString(item, "entityId"));
-            var expectedVersion = item.TryGetProperty("expectedVersion", out var version) ? version.GetInt64() : (long?)null;
-            ValidateChangeShape(module, operation, entityType, expectedVersion);
             var afterElement = item.GetProperty("after");
-            ValidatePayload(entityType, operation, afterElement);
-            var current = await ReadCurrentByTypeAsync(entityType, id, cancellationToken);
-            var displayName = DeriveDisplayName(entityType, operation, current, afterElement, id);
-            var preview = DerivePreview(entityType, operation, afterElement);
+            var idElement = OptionalString(item, "entityId");
+            if (idElement is null && operation != ChangeOperation.Create)
+                throw new InvalidDataException("entityId is required for " + operation + ". Use the exact ID of the existing object.");
+            var id = idElement is null ? Guid.NewGuid() : Guid.Parse(idElement);
+            var expectedVersion = item.TryGetProperty("expectedVersion", out var versionElement) ? versionElement.GetInt64() : (long?)null;
+            ValidateChangeShape(module, operation, entityType, expectedVersion);
+            var resolved = await ResolveParentAsync(entityType, operation, afterElement, cancellationToken);
+            var afterString = BuildPayload(entityType, operation, afterElement, resolved);
+            using var afterJson = JsonDocument.Parse(afterString);
+            var payloadElement = afterJson.RootElement;
+            ValidatePayload(entityType, operation, payloadElement);
+            var current = operation == ChangeOperation.Create ? null : await ReadCurrentByTypeAsync(entityType, id, cancellationToken);
+            var displayName = DeriveDisplayName(entityType, operation, current, payloadElement, id);
+            var preview = DerivePreview(entityType, operation, payloadElement);
             var currentVersion = current switch
             {
                 KnowledgeDocumentState document => document.Version,
@@ -207,19 +325,151 @@ public sealed class AgentTurnService(
                 TaskEntityState task => task.Version,
                 _ => (long?)null
             };
-            if (operation == ChangeOperation.Create && current is not null)
-                throw new InvalidOperationException($"{displayName} already exists; create a proposal with a new exact ID.");
             if (operation != ChangeOperation.Create && (currentVersion is null || expectedVersion != currentVersion))
-                throw new InvalidOperationException($"{displayName} changed or no longer exists; read it again and prepare a new preview.");
-            var after = afterElement.GetRawText();
+                throw new InvalidOperationException(displayName + " changed or no longer exists; read it again and prepare a new preview.");
             prepared.Add(ProposedChange.Create(operation,
                 new ChangeTarget(module, entityType, id, expectedVersion), displayName,
-                current is null ? null : JsonSerializer.Serialize(current, JsonOptions), after, preview));
+                current is null ? null : JsonSerializer.Serialize(current, JsonOptions), afterString, preview));
         }
         return ChangeProposal.Prepare(request.ConversationId, request.TurnId, Guid.NewGuid().ToString("N"), prepared);
     }
 
-    private static string RequiredString(JsonElement root, string name) =>
+    private static string? OptionalString(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString())
+            ? value.GetString()! : null;
+
+    private async Task<Guid?> FindByTitleAsync(IReadOnlyList<string> kinds, string title, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return null;
+        var wanted = title.Trim().ToLowerInvariant();
+        string? cursor = null;
+        for (var page = 0; page < 4; page++)
+        {
+            var result = await search.SearchAsync(new SearchRequest(title.Trim(), SearchCoverageMode.Exhaustive, kinds, null, Cursor: cursor, PageSize: 50), cancellationToken);
+            foreach (var hit in result.Hits)
+            {
+                var source = hit.Source;
+                if (kinds.Contains(source.Kind) && source.Title is not null && source.Title.Trim().ToLowerInvariant() == wanted)
+                    return source.Id;
+            }
+            if (result.IsComplete || string.IsNullOrWhiteSpace(result.NextCursor)) break;
+            cursor = result.NextCursor;
+        }
+        return null;
+    }
+
+    private async Task<Dictionary<string, object?>> ResolveParentAsync(string entityType, ChangeOperation operation, JsonElement after, CancellationToken cancellationToken)
+    {
+        var extra = new Dictionary<string, object?>();
+        if (operation != ChangeOperation.Create) return extra;
+        if (entityType == "knowledge.document" || entityType == "knowledge.section")
+        {
+            var parentTitle = TitleValue(after, "parent_section_title");
+            if (parentTitle is not null)
+            {
+                var parentId = await FindByTitleAsync(["knowledge.section"], parentTitle, cancellationToken);
+                if (parentId is null) throw new InvalidDataException("Section '" + parentTitle + "' was not found. Create it first or name it exactly.");
+                extra["parentSectionId"] = parentId;
+            }
+        }
+        else if (entityType == "planning.milestone" || entityType == "planning.feature")
+        {
+            var projectTitle = TitleValue(after, "project_title");
+            var rawProjectId = TitleValue(after, "projectId");
+            Guid? projectId = rawProjectId is null ? null : Guid.Parse(rawProjectId);
+            if (projectTitle is not null)
+            {
+                projectId = await FindByTitleAsync(["planning.project"], projectTitle, cancellationToken);
+                if (projectId is null) throw new InvalidDataException("Project '" + projectTitle + "' was not found. Create it first or name it exactly.");
+            }
+            if (projectId is null)
+                throw new InvalidDataException("A milestone or a feature requires a project; specify after.project_title (or after.projectId).");
+            extra["projectId"] = projectId;
+            if (entityType == "planning.feature")
+            {
+                var milestoneTitle = TitleValue(after, "milestone_title");
+                var rawMilestoneId = TitleValue(after, "milestoneId");
+                Guid? milestoneId = rawMilestoneId is null ? null : Guid.Parse(rawMilestoneId);
+                if (milestoneTitle is not null)
+                {
+                    milestoneId = await FindByTitleAsync(["planning.milestone"], milestoneTitle, cancellationToken);
+                    if (milestoneId is null) throw new InvalidDataException("Milestone '" + milestoneTitle + "' was not found. Create it first or name it exactly.");
+                    extra["milestoneId"] = milestoneId;
+                }
+                if (milestoneId is null)
+                    throw new InvalidDataException("A feature requires a milestone; specify after.milestone_title (or after.milestoneId).");
+                extra["milestoneId"] = milestoneId;
+            }
+        }
+        else if (entityType == "tasks.task")
+        {
+            var sectionTitle = TitleValue(after, "section_title");
+            if (sectionTitle is not null)
+            {
+                var sectionId = await FindByTitleAsync(["tasks.section"], sectionTitle, cancellationToken);
+                if (sectionId is null) throw new InvalidDataException("Task section '" + sectionTitle + "' was not found. Create it first or name it exactly.");
+                extra["sectionId"] = sectionId;
+            }
+            var projectTitle = TitleValue(after, "project_title");
+            var featureTitle = TitleValue(after, "feature_title");
+            if (projectTitle is not null && featureTitle is not null)
+            {
+                var projectId = await FindByTitleAsync(["planning.project"], projectTitle, cancellationToken);
+                if (projectId is null) throw new InvalidDataException("Project '" + projectTitle + "' was not found. Create it first or name it exactly.");
+                var featureId = await FindByTitleAsync(["planning.feature"], featureTitle, cancellationToken);
+                if (featureId is null) throw new InvalidDataException("Feature '" + featureTitle + "' was not found. Create it first or name it exactly.");
+                extra["planning"] = new Dictionary<string, object?> { ["projectId"] = projectId, ["milestoneId"] = null, ["featureId"] = featureId };
+            }
+        }
+        return extra;
+    }
+
+    private static string? TitleValue(JsonElement after, string name) =>
+        after.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString())
+            ? value.GetString()! : null;
+
+    private static string BuildPayload(string entityType, ChangeOperation operation, JsonElement after, Dictionary<string, object?> resolved)
+    {
+        var payload = new Dictionary<string, object?>();
+        var copy = (string name) =>
+        {
+            var value = OptionalString(after, name);
+            if (value is not null) payload[name] = value;
+        };
+        if (entityType == "knowledge.document" || entityType == "knowledge.section")
+        {
+            copy("title");
+            copy("markdown");
+            if (entityType == "knowledge.document" && !payload.ContainsKey("markdown"))
+                payload["markdown"] = "";
+        }
+        else if (entityType == "planning.project" || entityType == "planning.milestone" || entityType == "planning.feature")
+        {
+            copy("title");
+            copy("description");
+            var status = OptionalString(after, "feature_status");
+            if (status is not null && entityType == "planning.feature") payload["featureStatus"] = status;
+        }
+        else if (entityType == "tasks.task")
+        {
+            copy("title");
+            copy("description");
+            var placement = OptionalString(after, "placement");
+            var workStatus = OptionalString(after, "work_status");
+            if (placement is not null) payload["placement"] = placement;
+            if (workStatus is not null) payload["workStatus"] = workStatus;
+        }
+        else if (entityType == "tasks.section")
+        {
+            copy("title");
+            var bucket = OptionalString(after, "placement");
+            if (bucket is not null) payload["bucket"] = bucket;
+        }
+        foreach (var entry in resolved)
+            payload[entry.Key] = entry.Value;
+        return JsonSerializer.Serialize(payload, JsonOptions);
+    }
+private static string RequiredString(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString())
             ? value.GetString()!
             : throw new InvalidDataException($"'{name}' is required.");

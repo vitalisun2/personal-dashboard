@@ -127,6 +127,7 @@ export const chatApi = {
   get: (id: string, turnId?: string) => request<ChatConversation>(`/api/v2/chat/conversations/${encodeURIComponent(id)}${turnId ? `?turnId=${encodeURIComponent(turnId)}` : ''}`),
   olderTurns: (id: string, cursor: string) => request<{ turns: ChatTurn[]; nextCursor: string | null }>(`/api/v2/chat/conversations/${encodeURIComponent(id)}/turns?cursor=${encodeURIComponent(cursor)}`),
   create: () => request<ChatConversation>('/api/v2/chat/conversations', { method: 'POST', body: '{}' }),
+  delete: (id: string) => request<void>(`/api/v2/chat/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   send: (id: string, message: string, scope: ChatScope, model: ChatModel) =>
     request<ChatSendResult>(`/api/v2/agent/conversations/${encodeURIComponent(id)}/turns`, {
       method: 'POST', body: JSON.stringify({ message, scope, requestedModel: model }),

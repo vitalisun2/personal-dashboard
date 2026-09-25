@@ -109,10 +109,12 @@ async function selectConversation(id: string) {
 
 async function newConversation() {
   await closePendingProposalWhenLeaving()
+  const previous = conversation.value?.id
   conflictPreview.value = null
   showHistory.value = false
   loading.value = true
   try {
+    if (previous) void chatApi.delete(previous).catch(() => undefined)
     conversation.value = await chatApi.create()
     scopeMode.value = props.entity ? 'entity' : 'general'
     selectedModel.value = 'Gemma'
@@ -248,18 +250,17 @@ onBeforeUnmount(() => {
   const proposalId = pendingProposal.value?.proposalId
   const conversationId = conversation.value?.id
   if (proposalId && conversationId) void chatApi.dismissProposal(conversationId, proposalId).catch(() => undefined)
+  if (conversationId) void chatApi.delete(conversationId).catch(() => undefined)
 })
 </script>
 
 <template>
   <section class="chat-view" aria-label="Чат с агентом">
     <div class="chat-back-row">
-      <button type="button" class="doc-action doc-back" @click="emit('back')">← Назад</button>
-      <div class="chat-back-actions">
-        <button type="button" class="chat-history-btn" aria-label="История чатов" title="История чатов" :aria-expanded="showHistory" @click="openHistory">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6M4 4v4.6h4.6M12 7.5V12l3 2"></path></svg>
-        </button>
-        <label class="chat-model-select">
+          <button type="button" class="doc-action doc-back" @click="emit('back')">← Назад</button>
+          <div class="chat-back-actions">
+            <button type="button" class="chat-new-btn" @click="newConversation" aria-label="Новый чат" title="Новый чат">＋</button>
+            <label class="chat-model-select">
           <select v-model="selectedModel" aria-label="Модель следующего ответа">
             <option value="Gemma">Gemma</option>
             <option value="DeepSeek">DeepSeek</option>
@@ -328,27 +329,8 @@ onBeforeUnmount(() => {
     </div>
 
     <form class="chat-composer" @submit.prevent="send">
-      <textarea ref="inputElement" v-model="input" class="chat-input" rows="1" :disabled="sending || loading" placeholder="Сообщение агенту…" aria-label="Сообщение агенту" @keydown="onInputKeydown" />
-      <button type="submit" class="chat-send" :disabled="sending || loading || !input.trim()" aria-label="Отправить">↑</button>
-    </form>
-
-    <div class="chat-history-overlay" :class="{ open: showHistory }" :aria-hidden="!showHistory" @click.self="showHistory = false">
-      <div class="chat-history-sheet" role="dialog" aria-modal="true" aria-label="История чатов">
-        <div class="chat-history-head">
-          <div class="chat-history-title">История чатов</div>
-          <button type="button" class="chat-new" @click="newConversation">Новый чат</button>
-          <button type="button" class="chat-history-close" aria-label="Закрыть" @click="showHistory = false">×</button>
-        </div>
-        <div class="chat-history-items">
-          <button v-for="item in history" :key="item.id" type="button" class="chat-history-item" :aria-current="item.id === conversation?.id" @click="selectConversation(item.id)">
-            <strong>{{ item.title }}</strong><span>{{ formatHistoryDate(item.updatedAt) }}</span>
-          </button>
-          <button v-if="historyCursor" class="load-older" type="button" :disabled="loadingHistory" @click="loadMoreHistory">
-            {{ loadingHistory ? 'Загрузка…' : 'Более ранние чаты' }}
-          </button>
-          <p v-if="!history.length" class="chat-state">Пока нет сохранённых диалогов.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-</template>
+          <textarea ref="inputElement" v-model="input" class="chat-input" rows="1" :disabled="sending || loading" placeholder="Сообщение агенту…" aria-label="Сообщение агенту" @keydown="onInputKeydown" />
+          <button type="submit" class="chat-send" :disabled="sending || loading || !input.trim()" aria-label="Отправить">↑</button>
+        </form>
+      </section>
+    </template>

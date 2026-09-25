@@ -28,6 +28,11 @@ public static class ChatApiModule
         });
         api.MapGet("/{conversationId:guid}", GetConversationAsync);
         api.MapGet("/{conversationId:guid}/turns", GetTurnsAsync);
+        api.MapDelete("/{conversationId:guid}", async (Guid conversationId, IChatConversationStore store, CancellationToken ct) =>
+        {
+            await store.DeleteConversationAsync(conversationId, ct);
+            return Results.NoContent();
+        });
         api.MapDelete("/{conversationId:guid}/proposals/{proposalId:guid}", DismissProposalAsync);
         return endpoints;
     }
