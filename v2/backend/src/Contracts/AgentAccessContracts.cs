@@ -68,7 +68,8 @@ public sealed record PlanningMutation(
     string? Title = null,
     string? Description = null,
     string? FeatureStatus = null,
-    IReadOnlyList<VersionedEntityId>? Order = null);
+    IReadOnlyList<VersionedEntityId>? Order = null,
+    long? ExpectedParentVersion = null);
 
 public sealed record PlanningMutationResult(bool Applied, PlanningEntityState? Current, string? ConflictReason);
 

@@ -27,7 +27,8 @@ public sealed record ChatTurn(
     string ActualModel,
     ChatModelRoute ModelRoute,
     IReadOnlyList<SearchSourceReference> Sources,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    string? FallbackReason = null);
 
 public sealed record ChatTurnPage(IReadOnlyList<ChatTurn> Turns, string? NextCursor);
 
