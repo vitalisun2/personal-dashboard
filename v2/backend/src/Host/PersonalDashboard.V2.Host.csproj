@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Contracts\PersonalDashboard.V2.Contracts.csproj" />
+    <ProjectReference Include="..\Platform\PersonalDashboard.V2.Platform.csproj" />
+    <ProjectReference Include="..\Modules\Knowledge\Api\PersonalDashboard.V2.Knowledge.Api.csproj" />
+    <ProjectReference Include="..\Modules\Knowledge\Infrastructure\PersonalDashboard.V2.Knowledge.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Planning\Api\PersonalDashboard.V2.Planning.Api.csproj" />
+    <ProjectReference Include="..\Modules\Planning\Infrastructure\PersonalDashboard.V2.Planning.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Tasks\Api\PersonalDashboard.V2.Tasks.Api.csproj" />
+    <ProjectReference Include="..\Modules\Tasks\Infrastructure\PersonalDashboard.V2.Tasks.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Chat\Api\PersonalDashboard.V2.Chat.Api.csproj" />
+    <ProjectReference Include="..\Modules\Chat\Infrastructure\PersonalDashboard.V2.Chat.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Agent\Api\PersonalDashboard.V2.Agent.Api.csproj" />
+    <ProjectReference Include="..\Modules\Agent\Infrastructure\PersonalDashboard.V2.Agent.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Search\Api\PersonalDashboard.V2.Search.Api.csproj" />
+    <ProjectReference Include="..\Modules\Search\Infrastructure\PersonalDashboard.V2.Search.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
+
