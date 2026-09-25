@@ -8,10 +8,12 @@ const navigation = [
   { path: '/knowledge', label: 'База знаний', icon: '▤' },
   { path: '/planning', label: 'Планирование', icon: '▦' },
   { path: '/tasks', label: 'Задачи', icon: '☑' },
+  { path: '/testing', label: 'Тестирование', icon: '◈' },
 ]
 const currentSection = computed(() => String(route.path.split('/')[1] || 'knowledge'))
-const titles: Record<string, string> = { knowledge: 'База знаний', planning: 'Планирование', tasks: 'Задачи', chat: 'Агент', search: 'Поиск' }
+const titles: Record<string, string> = { knowledge: 'База знаний', planning: 'Планирование', tasks: 'Задачи', chat: 'Агент', search: 'Поиск', testing: 'Тестирование' }
 const title = computed(() => titles[currentSection.value] || 'База знаний')
+const hideBottomNav = computed(() => currentSection.value === 'chat')
 const syncStatus = ref<SyncStatus>('ready')
 let unsubscribeSyncStatus: (() => void) | undefined
 onMounted(() => { unsubscribeSyncStatus = subscribeSyncStatus(next => { syncStatus.value = next }) })
@@ -34,7 +36,7 @@ onUnmounted(() => unsubscribeSyncStatus?.())
         </header>
         <div class="page-content"><RouterView /></div>
       </div>
-      <nav class="bottom-window" aria-label="Навигация">
+      <nav v-if="!hideBottomNav" class="bottom-window" aria-label="Навигация">
         <RouterLink v-for="item in navigation" :key="item.path" :to="item.path" class="bottom-item" :class="{ active: currentSection === item.path.slice(1) }">
           <span class="nav-icon" aria-hidden="true">{{ item.icon }}</span><span>{{ item.label }}</span>
         </RouterLink>
