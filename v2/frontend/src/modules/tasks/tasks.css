@@ -1,41 +1,6 @@
-.tracker-page { --task-surface:#18242f;--task-muted:#91a2b6;--task-line:#293744;color:#f3f6fa }
-.tracker-tabs { display:flex;align-items:center;gap:8px;margin:20px 0 14px }
-.task-tab { min-height:48px;flex:1;min-width:0;padding:3px;border:1px solid #263542;border-radius:12px;background:#101820;color:#8192a5;font-size:13px;font-weight:650 }
-.task-tab.active { border-color:#31475b;background:#223142;color:#fff;font-weight:720;box-shadow:inset 0 0 0 1px #31475b }
-.tab-spacer { display:none }
-.task-toolbar-icon { width:48px;height:48px;flex:none;display:grid;place-items:center;border:1px solid #2b3c4a;border-radius:12px;background:#18242f;color:#b8c7d6;font-size:20px }
-.task-toolbar-icon.active { border-color:#54749a;color:#eef4fa }
-.tracker-editor,.task-detail-card,.task-section { margin:0 0 8px;padding:0;border:0;border-radius:12px;background:transparent }
-.tracker-editor,.task-detail-card { display:grid;gap:12px;padding:14px;border:1px solid #304455;background:#18242f }
-.tracker-editor label,.task-detail-card label { display:grid;gap:7px;color:#91a2b6;font-size:12px;font-weight:650 }
-.tracker-editor input,.tracker-editor textarea,.tracker-editor select,.task-detail-card input,.task-detail-card textarea { width:100%;border:1px solid #344858;border-radius:9px;padding:10px 12px;background:#101920;color:#f3f6fa;font:inherit }
-.editor-actions { display:flex;justify-content:flex-end;gap:8px }
-.primary-button,.quiet-button { min-height:36px;border:1px solid #2b3c4a;border-radius:10px;padding:0 11px;background:#18242f;color:#cbd8e6;font-size:12px;font-weight:650;cursor:pointer }
-.primary-button { border-color:#345b86;background:#284a72;color:#e4efff }
-.task-section>header { display:flex;align-items:center;gap:8px;min-height:44px;margin:0;border-radius:12px;color:#e8edf3 }
-.task-section>header h2 { display:flex;align-items:center;flex:1;min-width:0;margin:0;color:#e8edf3;font-size:15px;font-weight:700 }
-.task-section>header h2 .collapse-toggle { min-width:34px;padding:3px;color:#d2dbe6;font-size:20px }
-.task-section>header>span { color:#8192a5;font-size:12px }
-.task-section>header>.quiet-button { min-height:32px;padding:0 8px }
-.task-row { position:relative;display:flex;align-items:center;gap:8px;min-height:44px;margin:0 0 0 17px;border-top:0;border-radius:10px;color:#edf2f7 }
-.task-title { flex:1;min-width:0;overflow:hidden;padding:7px 4px 7px 16px;border:0;background:transparent;color:#edf2f7;text-align:left;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:590;cursor:pointer }
-.task-status { flex:none;color:#93a6ba;font-size:11px;font-weight:680;white-space:nowrap }
-.task-status.status-done,.task-status.status-completed { color:#8dccaa }.task-status.status-inprogress,.task-status.status-in_progress { color:#aeb7ef }
-.task-placement { color:#93a6ba }
-.task-filters { display:flex;gap:6px;overflow-x:auto;margin:0 0 12px;padding-bottom:2px;scrollbar-width:none }.task-filters::-webkit-scrollbar{display:none}
-.task-filters button { min-height:34px;padding:0 10px;border:1px solid transparent;border-radius:10px;background:transparent;color:#8fa0b2;font-size:12px;white-space:nowrap }
-.task-filters button.active { border-color:#314150;color:#fff;font-weight:650 }
-.board-empty { display:grid;min-height:120px;place-items:center;color:#91a2b6;font-size:14px }
-.tracker-error { margin:12px 0;padding:11px 14px;border-radius:10px;background:#382327;color:#e6a3aa;font-size:13px }.tracker-error button{float:right;border:0;background:transparent;color:inherit}
-.back-link { justify-self:start;padding:0;border:0;background:transparent;color:#b9d2f4;cursor:pointer }
-.detail-actions { display:flex;flex-wrap:wrap;gap:8px }
-.context-actions { display:flex;flex:1 0 100%;flex-wrap:wrap;gap:7px;padding:8px 0;animation:task-context-in 120ms ease-out }
-.drag-handle { cursor:grab;touch-action:none }.drag-handle:active{cursor:grabbing}
-.collapse-toggle { min-width:30px;padding:4px 8px }
-.project-diamond { margin-right:7px;color:#d89a64;font-size:12px }
-.task-archive-bar { display:flex;justify-content:flex-end;flex:none;padding:8px 4px 22px }
-.task-archive-link { min-height:40px;padding:0 14px;border:1px solid #2f4050;border-radius:12px;background:#18242f;box-shadow:0 8px 20px #0004;color:#d6e1ec;font-size:13px;font-weight:700 }
-.task-detail-card .back-link { margin-bottom:6px }
-.task-detail-card label:first-of-type { margin-top:8px }
-@keyframes task-context-in { from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)} }
-@media(max-width:600px){.tracker-tabs{gap:6px}.task-toolbar-icon{width:44px;height:48px}.task-row{flex-wrap:wrap;padding:5px 0}.task-row .task-title{flex-basis:100%}.task-row .context-actions{position:absolute;right:4px;bottom:calc(100% + 5px);z-index:8;flex:none;width:max-content;max-width:min(95vw,420px);padding:8px;border:1px solid #35495b;border-radius:12px;background:#18242f;box-shadow:0 8px 24px #0006}.detail-actions>*{flex:1 1 auto;text-align:center}}
+/* Tasks module — only styles NOT covered by shared/phone-shell styles (v2/mockup parity).
+   All .task-* layout/visuals live in shared/styles.css under .phone-shell; here we add
+   module-specific bits: [hidden] handling for buttons, error banner. */
+.phone-shell [hidden] { display: none !important }
+.phone-shell .tasks-section .task-error { margin: 12px 0; padding: 11px 14px; border-radius: 10px; background: #382327; color: #e6a3aa; font-size: 13px; flex: none }
+.phone-shell .tasks-section .task-error button { float: right; border: 0; background: transparent; color: inherit }

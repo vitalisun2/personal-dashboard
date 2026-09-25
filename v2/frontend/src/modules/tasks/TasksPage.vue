@@ -1,22 +1,581 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { chatRoute } from '../../shared/chatRoute'
 import { getOfflineStore, saveOfflineMutation } from '../../offline/runtime'
 import type { OfflineEntity, SyncOperation } from '../../offline/types'
 
 type Task = { id: string; title: string; description: string; projectId?: string; milestoneId?: string; featureId?: string; location: string; workStatus: string; sectionId?: string; position: number; version: number }
 type Section = { id: string; name: string; location: string; position: number; version: number }
 type ProjectLabel = { id: string; title: string }
+type MenuItem = { label: string; danger?: boolean; action: () => void }
+type GroupView = { kind: 'plain'; key: string; title: string; section: Section; tasks: Task[] } | { kind: 'project'; key: string; title: string; projectId: string; tasks: Task[] }
+type SwipeState = { key: string; pointerId: number; startX: number; startY: number; moved: boolean; long: boolean; timer: number }
+type DragState = { kind: 'task' | 'section'; id: string; pointerId: number; startX: number; startY: number; row: HTMLElement; target: HTMLElement | null; place: 'before' | 'after' | 'inside' | ''; started: boolean; ghost: HTMLDivElement | null; offsetX: number; offsetY: number; width: number; height: number; label: string }
+
 const api = '/api/v2/tasks'
 const route = useRoute(), router = useRouter()
-const state = reactive({ bucket: 'Backlog' as 'Backlog' | 'Сегодня', filter: 'all', archive: false, orderMode: false, contextTaskId: '', contextSectionId: '', expanded: { Backlog: new Set<string>(), Сегодня: new Set<string>() }, tasks: [] as Task[], sections: [] as Section[], projects: [] as ProjectLabel[], detail: null as Task | null, busy: false, error: '', creating: false, creatingSection: false, title: '', description: '', sectionId: '' })
+const state = reactive({
+  bucket: 'Backlog' as 'Backlog' | 'Сегодня', filter: 'all', archive: false, orderMode: false,
+  expanded: { Backlog: new Set<string>(), Сегодня: new Set<string>() },
+  tasks: [] as Task[], sections: [] as Section[], projects: [] as ProjectLabel[],
+  detail: null as Task | null, busy: false, error: '',
+  creating: false, createType: 'task' as 'task' | 'section', createListOpen: false,
+  title: '', description: '', sectionId: '',
+  renaming: null as null | { kind: 'task' | 'section'; id: string; value: string },
+  detailEditing: '' as '' | 'title' | 'description',
+})
 const location = computed(() => state.archive ? 'Archived' : state.bucket === 'Сегодня' ? 'Today' : 'Backlog')
 const filtered = computed(() => state.tasks.filter(task => !state.detail || task.id === state.detail.id).filter(task => state.filter === 'all' || statusName(task.workStatus) === state.filter))
 const linkedGroups = computed(() => {
   const ids = [...new Set(filtered.value.filter(task => task.projectId).map(task => task.projectId!))]
   return ids.map(projectId => ({ projectId, title: state.projects.find(x => x.id === projectId)?.title || 'Проект', tasks: filtered.value.filter(task => task.projectId === projectId).sort((a, b) => a.position - b.position) }))
 })
+const groups = computed<GroupView[]>(() => {
+  if (state.archive) return []
+  const result: GroupView[] = []
+  for (const section of state.sections) {
+    const tasks = filtered.value.filter(item => item.sectionId === section.id)
+    if (state.filter !== 'all' && !tasks.length) continue
+    result.push({ kind: 'plain', key: `section:${section.id}`, title: section.name, section, tasks })
+  }
+  for (const group of linkedGroups.value) {
+    if (!group.tasks.length) continue
+    result.push({ kind: 'project', key: `project:${group.projectId}`, title: group.title, projectId: group.projectId, tasks: group.tasks })
+  }
+  return result
+})
+const allOpen = computed(() => {
+  const keys = groups.value.map(g => g.key)
+  return keys.length > 0 && keys.every(key => state.expanded[state.bucket].has(key))
+})
+const showEmpty = computed(() => state.archive ? state.tasks.length === 0 && !state.busy : groups.value.length === 0 && !state.busy)
+const emptyText = computed(() => state.busy ? 'Загружаем задачи…' : state.archive ? 'Архив пока пуст.' : 'Здесь пока нет задач.')
+const detailOrigin = computed(() => state.detail ? originPath(state.detail) : '')
+const detailMoveLabel = computed(() => { const task = state.detail; if (!task) return ''; return isArchived(task) ? 'В Backlog' : isToday(task) ? 'В Backlog' : 'В Сегодня' })
+const renamingKey = computed(() => state.renaming ? (state.renaming.kind === 'section' ? `section:${state.renaming.id}` : `task:${state.renaming.id}`) : '')
+const renamingValue = computed({ get: () => state.renaming?.value ?? '', set: (value: string) => { if (state.renaming) state.renaming.value = value } })
+const filters = [{ value: 'all', label: 'Все', dot: '' }, { value: 'New', label: 'Новые', dot: 'new' }, { value: 'InProgress', label: 'В работе', dot: 'work' }, { value: 'Done', label: 'Готово', dot: 'done' }]
+
+const rootEl = ref<HTMLElement | null>(null)
+const groupsEl = ref<HTMLElement | null>(null)
+const scrollEl = ref<HTMLElement | null>(null)
+const menuEl = ref<HTMLElement | null>(null)
+const titleInputEl = ref<HTMLInputElement | null>(null)
+const descriptionInputEl = ref<HTMLTextAreaElement | null>(null)
+const renameInputEl = ref<HTMLInputElement | null>(null)
+const nameFieldEl = ref<HTMLInputElement | null>(null)
+const confirmCancelEl = ref<HTMLButtonElement | null>(null)
+
+let swipe: SwipeState | null = null
+let drag: DragState | null = null
+let suppressOpenUntil = 0
+let toastTimer = 0
+let renameDone = false
+
+// ---------- toast ----------
+const toast = reactive({ text: '', show: false })
+function flash(message: string) { clearTimeout(toastTimer); toast.text = message; toast.show = true; toastTimer = window.setTimeout(() => { toast.show = false }, 1600) }
+
+// ---------- confirm dialog ----------
+const confirmBox = reactive({ open: false, title: '', body: '', confirmLabel: 'Подтвердить', onConfirm: null as (() => void) | null })
+function askConfirm(options: { title: string; body?: string; confirmLabel?: string; onConfirm: () => void }) {
+  closeMenu()
+  confirmBox.title = options.title; confirmBox.body = options.body || ''; confirmBox.confirmLabel = options.confirmLabel || 'Подтвердить'; confirmBox.onConfirm = options.onConfirm; confirmBox.open = true
+}
+function closeConfirm() { confirmBox.open = false; confirmBox.onConfirm = null }
+function runConfirm() { const callback = confirmBox.onConfirm; closeConfirm(); callback?.() }
+watch(() => confirmBox.open, open => { if (open) nextTick(() => confirmCancelEl.value?.focus()) })
+
+// ---------- context menu ----------
+const menu = reactive({ open: false, kind: '' as 'task' | 'section' | 'project', key: '', items: [] as MenuItem[], x: 0, y: 0 })
+const revealedKey = ref('')
+function closeMenu() { if (!menu.open && !revealedKey.value) return; menu.open = false; menu.items = []; revealedKey.value = '' }
+const isToday = (task: Task) => String(task.location).toLowerCase() === 'today'
+const isArchived = (task: Task) => String(task.location).toLowerCase() === 'archived'
+const isLinked = (task: Task) => Boolean(task.projectId && task.featureId)
+const taskById = (id: string) => state.tasks.find(t => t.id === id)
+function statusName(status: string) { return ({ '0': 'New', '1': 'InProgress', '2': 'Done', 'new': 'New', 'inProgress': 'InProgress', 'done': 'Done', 'in_progress': 'InProgress', 'active': 'InProgress', 'completed': 'Done', 'New': 'New', 'InProgress': 'InProgress', 'Done': 'Done' } as Record<string, string>)[String(status)] || String(status) }
+function workState(status: string) { const s = statusName(status); return s === 'Done' ? 'completed' : s === 'InProgress' ? 'in_progress' : 'new' }
+function workLabel(status: string) { return ({ 'new': 'Новая', 'in_progress': 'В работе', 'completed': 'Готово' } as Record<string, string>)[workState(status)] || 'Новая' }
+function originPath(task: Task) {
+  const base = task.projectId ? (state.projects.find(p => p.id === task.projectId)?.title || 'Проект') : (state.sections.find(s => s.id === task.sectionId)?.name || 'Личное')
+  return isArchived(task) ? `Архив · ${base}` : base
+}
+function advanceLabel(task: Task) { const s = statusName(task.workStatus); return s === 'Done' ? 'Завершить и в архив' : s === 'InProgress' ? 'Отметить «Готово»' : 'Отметить «В работе»' }
+function menuItemsFor(kind: 'task' | 'section' | 'project', id: string): MenuItem[] {
+  if (kind === 'task') {
+    const task = taskById(id); if (!task) return []
+    const items: MenuItem[] = []
+    if (isToday(task)) items.push({ label: advanceLabel(task), action: () => { void advanceTask(task) } })
+    items.push({
+      label: isArchived(task) ? 'Вернуть в Backlog' : String(task.location).toLowerCase() === 'backlog' ? 'Перенести в Сегодня' : 'Вернуть в Backlog',
+      action: () => { if (isArchived(task)) { void mutate(task, 'restore').then(() => flash('Возвращено в Backlog')) } else void moveTaskVia(task, String(task.location).toLowerCase() === 'backlog' ? 'today' : 'backlog') },
+    })
+    if (String(task.location).toLowerCase() === 'backlog' && isLinked(task)) items.push({ label: 'Вернуть в план', action: () => { void mutate(task, 'planning') } })
+    items.push({ label: 'Переименовать', action: () => startRename('task', task.id) })
+    if (!isArchived(task)) items.push({ label: 'Убрать в архив', danger: true, action: () => archiveTask(task) })
+    return items
+  }
+  if (kind === 'section') {
+    const section = state.sections.find(s => s.id === id); if (!section) return []
+    const tasks = state.tasks.filter(t => t.sectionId === section.id)
+    return [
+      { label: 'Переименовать', action: () => startRename('section', section.id) },
+      { label: 'Удалить раздел', danger: true, action: () => deleteSectionFlow(section, tasks) },
+    ]
+  }
+  const tasks = state.tasks.filter(t => t.projectId === id)
+  return [{ label: 'Удалить раздел', danger: true, action: () => deleteProjectGroupFlow(id, tasks) }]
+}
+function openMenuAt(key: string, point: { x: number; y: number } | null) {
+  if (state.orderMode) return
+  const kind = key.startsWith('task:') ? 'task' : key.startsWith('section:') ? 'section' : 'project'
+  const id = kind === 'task' ? key.slice(5) : kind === 'section' ? key.slice(8) : key.slice(8)
+  const items = menuItemsFor(kind, id)
+  if (!items.length) return
+  const wrap = groupsEl.value?.querySelector<HTMLElement>(`[data-reveal-key="${CSS.escape(key)}"]`)
+  if (!wrap) return
+  const rect = wrap.getBoundingClientRect()
+  closeMenu()
+  revealedKey.value = key
+  menu.kind = kind; menu.key = key; menu.items = items; menu.x = -9999; menu.y = -9999; menu.open = true
+  nextTick(() => positionMenu(rect, point))
+  if (!point) suppressOpenUntil = Date.now() + 350
+}
+function positionMenu(anchorRect: DOMRect, point: { x: number; y: number } | null) {
+  const el = menuEl.value, root = rootEl.value
+  if (!el || !root) return
+  const shell = root.getBoundingClientRect()
+  const leftLimit = Math.max(shell.left + 8, 8)
+  const rightLimit = Math.min(shell.right - 8, window.innerWidth - 8)
+  const topLimit = Math.max(shell.top + 8, 8)
+  const bottomLimit = Math.min(shell.bottom - 8, window.innerHeight - 8)
+  const width = el.offsetWidth, height = el.offsetHeight
+  let x, y
+  if (point) {
+    x = point.x + 8; y = point.y + 8
+    if (x + width > rightLimit) x = point.x - width - 8
+    if (y + height > bottomLimit) y = point.y - height - 8
+  } else {
+    x = anchorRect.right - width
+    y = anchorRect.top - height - 6
+    if (y < topLimit) y = anchorRect.bottom + 6
+    if (y + height > bottomLimit) y = anchorRect.top - height - 6
+  }
+  x = Math.max(leftLimit, Math.min(x, rightLimit - width))
+  y = Math.max(topLimit, Math.min(y, bottomLimit - height))
+  el.style.left = `${x}px`; el.style.top = `${y}px`
+  el.style.setProperty('--menu-enter-y', y < anchorRect.top ? '6px' : '-6px')
+  el.classList.remove('opening'); void el.offsetWidth; el.classList.add('opening')
+}
+function triggerMenu(key: string) {
+  if (state.orderMode) return
+  if (menu.open && menu.key === key) closeMenu()
+  else openMenuAt(key, null)
+}
+function rowContextMenu(event: MouseEvent, key: string) {
+  event.preventDefault()
+  if (state.orderMode || menu.open) return
+  openMenuAt(key, { x: event.clientX, y: event.clientY })
+}
+function onDocPointerDown(event: PointerEvent) {
+  if (!menu.open) return
+  const target = event.target as HTMLElement | null
+  if (menuEl.value?.contains(target) || target?.closest('.row-menu-trigger')) return
+  closeMenu()
+}
+function onDocKeyDown(event: KeyboardEvent) {
+  if (event.key !== 'Escape') return
+  if (menu.open) { event.preventDefault(); closeMenu() }
+  else if (confirmBox.open) { event.preventDefault(); closeConfirm() }
+}
+function suppressCapture(event: MouseEvent) {
+  if (Date.now() < suppressOpenUntil && !(event.target as HTMLElement).closest('.row-context-menu')) { event.preventDefault(); event.stopPropagation() }
+}
+function onTaskOpenClick(task: Task) {
+  if (state.orderMode) return
+  if (revealedKey.value) { closeMenu(); return }
+  state.orderMode = false
+  openTask(task)
+}
+
+// ---------- gestures (long-press / swipe) ----------
+function rowPointerDown(event: PointerEvent, key: string) {
+  if (state.orderMode || event.button > 0) return
+  if ((event.target as HTMLElement).closest('.handle,.row-menu-trigger,.task-inline-input')) return
+  if (swipe?.timer) window.clearTimeout(swipe.timer)
+  const current: SwipeState = { key, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false, long: false, timer: 0 }
+  swipe = current
+  if (event.pointerType === 'touch' || event.pointerType === 'pen') {
+    current.timer = window.setTimeout(() => {
+      if (swipe !== current || current.moved) return
+      current.long = true
+      openMenuAt(key, null)
+    }, 480)
+  }
+}
+function rowPointerMove(event: PointerEvent) {
+  if (!swipe || swipe.pointerId !== event.pointerId) return
+  const dx = event.clientX - swipe.startX, dy = event.clientY - swipe.startY
+  if (Math.hypot(dx, dy) > 8) { swipe.moved = true; window.clearTimeout(swipe.timer) }
+  if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) { swipe = null; return }
+  if (dx < -12 && Math.abs(dx) > Math.abs(dy) * 1.1) event.preventDefault()
+}
+function rowPointerUp(event: PointerEvent) {
+  if (!swipe || swipe.pointerId !== event.pointerId) return
+  const current = swipe
+  window.clearTimeout(current.timer); swipe = null
+  if (current.long) return
+  const dx = event.clientX - current.startX, dy = event.clientY - current.startY
+  if (Math.abs(dx) < Math.abs(dy) * 1.2) return
+  if (dx <= -56) { suppressOpenUntil = Date.now() + 320; openMenuAt(current.key, null) }
+  else if (dx >= 45 && menu.open) { suppressOpenUntil = Date.now() + 320; closeMenu() }
+}
+function rowPointerCancel() { if (swipe) { window.clearTimeout(swipe.timer); swipe = null } }
+
+// ---------- navigation / actions ----------
+function openTask(task: Task) { if (!state.orderMode && Date.now() >= suppressOpenUntil) { closeMenu(); state.detailEditing = ''; void router.push(`/tasks/${task.id}`) } }
+function closeDetail() { state.detailEditing = ''; void router.push('/tasks') }
+function selectBucket(bucket: 'Backlog' | 'Сегодня') { closeMenu(); state.bucket = bucket; state.archive = false; state.orderMode = false; state.filter = 'all'; state.detail = null; state.title = ''; state.description = ''; void router.replace('/tasks').then(refresh) }
+function openArchive() { closeMenu(); state.orderMode = false; state.filter = 'all'; state.archive = true; if (route.path !== '/tasks') { void router.replace('/tasks') } else { void refresh() } }
+function closeArchive() { closeMenu(); state.orderMode = false; state.filter = 'all'; state.archive = false; void refresh() }
+function toggleAllSections() {
+  const keys = groups.value.map(g => g.key)
+  const open = keys.length > 0 && keys.every(key => state.expanded[state.bucket].has(key))
+  state.expanded[state.bucket] = new Set(open ? [] : keys)
+}
+function toggleSectionFor(key: string) {
+  if (state.orderMode) return
+  if (revealedKey.value) { closeMenu(); return }
+  const open = state.expanded[state.bucket]
+  open.has(key) ? open.delete(key) : open.add(key)
+}
+function isExpanded(key: string) { return state.expanded[state.bucket].has(key) }
+function toggleOrderMode() { closeMenu(); swipe = null; clearGhost(); clearDragMarks(); drag = null; state.orderMode = !state.orderMode }
+async function moveTaskVia(task: Task, target: 'today' | 'backlog') {
+  await mutate(task, target)
+  flash(target === 'today' ? 'Добавлено в Сегодня' : 'Возвращено в Backlog')
+}
+async function advanceTask(task: Task) {
+  const s = statusName(task.workStatus)
+  if (s === 'Done') { await mutate(task, 'archive'); flash('Задача завершена и отправлена в архив') }
+  else { const next = s === 'New' ? 'inProgress' : 'done'; await mutate(task, 'status', 'PUT', { expectedVersion: task.version, status: next }); flash(next === 'inProgress' ? 'Статус: В работе' : 'Статус: Готово') }
+}
+function archiveTask(task: Task) {
+  askConfirm({ title: 'Убрать задачу в архив?', body: `«${task.title}» можно будет найти в архиве.`, confirmLabel: 'В архив', onConfirm: () => { void mutate(task, 'archive').then(() => flash('Задача перемещена в архив')) } })
+}
+function deleteSectionFlow(section: Section, tasks: Task[]) {
+  askConfirm({
+    title: `Удалить раздел «${section.name}»?`,
+    body: tasks.length ? `${tasks.length} задач будут перемещены в архив.` : 'Раздел будет удалён.',
+    confirmLabel: 'Удалить',
+    onConfirm: () => { void (async () => { for (const task of tasks) await mutate(task, 'archive'); await deleteSection(section); flash('Раздел удалён') })() },
+  })
+}
+function deleteProjectGroupFlow(projectId: string, tasks: Task[]) {
+  const title = state.projects.find(p => p.id === projectId)?.title || 'Проект'
+  askConfirm({
+    title: `Удалить раздел «${title}»?`,
+    body: tasks.length ? `${tasks.length} задач будут перемещены в архив.` : 'Раздел будет удалён.',
+    confirmLabel: 'Удалить',
+    onConfirm: () => { void (async () => { for (const task of tasks) await mutate(task, 'archive'); flash('Раздел удалён') })() },
+  })
+}
+
+// ---------- inline rename ----------
+function startRename(kind: 'task' | 'section', id: string) {
+  const current = kind === 'task' ? taskById(id) : state.sections.find(s => s.id === id)
+  if (!current) return
+  closeMenu()
+  renameDone = false
+  state.renaming = { kind, id, value: kind === 'task' ? (current as Task).title : (current as Section).name }
+  nextTick(() => { const el = renameInputEl.value; if (el) { el.focus(); el.select() } })
+}
+async function commitRename(save: boolean) {
+  const renaming = state.renaming
+  if (!renaming || renameDone) return
+  renameDone = true
+  const value = renaming.value.trim()
+  state.renaming = null
+  if (!save || !value) return
+  if (renaming.kind === 'task') { const task = taskById(renaming.id); if (task) await renameTask(task, value) }
+  else { const section = state.sections.find(s => s.id === renaming.id); if (section) await renameSection(section, value) }
+}
+async function renameTask(task: Task, title: string) {
+  try { await request(`/${task.id}`, { method: 'PUT', body: JSON.stringify({ expectedVersion: task.version, title, description: task.description }) }); await refresh() }
+  catch (error) {
+    if (error instanceof TypeError) {
+      const local = { ...task, title, version: task.version + 1 }
+      await queueTask('tasks.task', task.id, task.version, { operation: 'update', kind: 'task', id: task.id, expectedVersion: task.version, title, description: task.description }, false, local)
+      state.tasks = state.tasks.map(x => x.id === task.id ? local : x)
+      if (state.detail?.id === task.id) state.detail = local
+      await cacheRows('tasks.task', state.tasks, true)
+      state.error = 'Нет сети. Изменение сохранено и будет синхронизировано позже.'; return
+    }
+    state.error = (error as Error).message
+  }
+}
+async function renameSection(section: Section, name: string) {
+  if (!name || name === section.name) return
+  try { await request(`/sections/${section.id}`, { method: 'PUT', body: JSON.stringify({ expectedVersion: section.version, name }) }); await refresh() }
+  catch (error) {
+    if (error instanceof TypeError) {
+      const local = { ...section, name, version: section.version + 1 }
+      await queueTask('tasks.section', section.id, section.version, { operation: 'update', kind: 'section', id: section.id, expectedVersion: section.version, title: name, bucket: section.location }, false, local)
+      state.sections = state.sections.map(x => x.id === section.id ? local : x); state.error = 'Нет сети. Изменение сохранено и будет синхронизировано позже.'; return
+    }
+    state.error = (error as Error).message
+  }
+}
+async function deleteSection(section: Section) {
+  try { await request(`/sections/${section.id}`, { method: 'DELETE', body: JSON.stringify({ expectedVersion: section.version }) }); await refresh() }
+  catch (error) {
+    if (error instanceof TypeError) {
+      await queueTask('tasks.section', section.id, section.version, { operation: 'delete', kind: 'section', id: section.id, bucket: section.location }, true)
+      state.sections = state.sections.filter(x => x.id !== section.id); await cacheRows('tasks.section', state.sections, true); state.error = 'Нет сети. Удаление сохранено и будет синхронизировано позже.'; return
+    }
+    state.error = (error as Error).message
+  }
+}
+
+// ---------- create sheet ----------
+function openCreateSheet() {
+  closeMenu(); closeConfirm()
+  state.createType = 'task'; state.title = ''; state.description = ''
+  if (!state.sections.some(s => s.id === state.sectionId)) state.sectionId = state.sections[0]?.id || ''
+  state.createListOpen = false; state.creating = true
+  nextTick(() => nameFieldEl.value?.focus())
+}
+function closeCreateSheet() { state.creating = false; state.createListOpen = false }
+async function submitCreate() {
+  if (!state.title.trim()) return
+  try {
+    if (state.createType === 'section') {
+      const created = await createSection()
+      if (created) { closeCreateSheet(); flash('Раздел создан') }
+      return
+    }
+    const created = await createTask()
+    if (created) { closeCreateSheet(); void router.push(`/tasks/${created.id}`) }
+  } catch (error) { state.error = (error as Error).message }
+}
+async function createTask(): Promise<Task | null> {
+  if (!state.title.trim()) return null
+  let created: Task, queuedOffline = false, moveError = ''
+  try { created = await request<Task>('', { method: 'POST', body: JSON.stringify({ title: state.title, description: state.description, projectId: null, milestoneId: null, featureId: null, sectionId: state.bucket === 'Backlog' ? (state.sectionId || null) : null }) }) }
+  catch (error) {
+    if (!(error instanceof TypeError)) throw error
+    const id = newId(), sectionId = state.bucket === 'Backlog' ? state.sectionId || state.sections[0]?.id || null : null
+    const payload = { operation: 'create', kind: 'task', id, title: state.title.trim(), description: state.description, placement: 'backlog', workStatus: 'new', sectionId }
+    const local: Task = { id, title: state.title.trim(), description: state.description, location: 'backlog', workStatus: 'new', sectionId: sectionId || undefined, position: state.tasks.length, version: 1 }
+    await queueTask('tasks.task', id, null, payload, false, local)
+    created = { id, title: state.title.trim(), description: state.description, location: 'backlog', workStatus: 'new', sectionId: sectionId || undefined, position: state.tasks.length, version: 1 }
+    queuedOffline = true
+    state.tasks.push(created); await cacheRows('tasks.task', state.tasks, true); state.error = 'Нет сети. Задача сохранена и будет синхронизирована позже.'
+  }
+  if (state.bucket === 'Сегодня') {
+    if (queuedOffline) {
+      const backlogTask = created
+      created = { ...created, location: 'today', version: created.version + 1 }
+      await queueTask('tasks.task', backlogTask.id, backlogTask.version, { operation: 'move', kind: 'task', id: backlogTask.id, expectedVersion: backlogTask.version, placement: 'today', workStatus: 'new', sectionId: null }, false, created)
+      state.tasks = state.tasks.map(x => x.id === created.id ? created : x)
+      await cacheRows('tasks.task', state.tasks, true)
+    } else {
+      try { await request(`/${created.id}/today`, { method: 'POST', body: JSON.stringify({ expectedVersion: created.version }) }) }
+      catch (error) {
+        if (error instanceof TypeError) {
+          const todayTask = { ...created, location: 'today', version: created.version + 1 }
+          await queueTask('tasks.task', created.id, created.version, { operation: 'move', kind: 'task', id: created.id, expectedVersion: created.version, placement: 'today', workStatus: 'new', sectionId: null }, false, todayTask)
+          state.tasks = state.tasks.map(x => x.id === created.id ? todayTask : x); state.error = 'Нет сети. Создание сохранено, перенос на Сегодня будет синхронизирован позже.'
+        } else moveError = (error as Error).message
+      }
+    }
+  }
+  state.title = ''; state.description = ''; state.creating = false
+  if (state.bucket === 'Backlog' && created.sectionId) state.expanded[state.bucket].add(created.sectionId)
+  if (moveError) { state.bucket = 'Backlog'; await refresh(); state.error = `Задача создана в Backlog, но не перенесена на Сегодня: ${moveError}` }
+  else if (!queuedOffline) await refresh()
+  return created
+}
+async function createSection(): Promise<Section | null> {
+  if (!state.title.trim()) return null
+  let created: Section, queuedOffline = false
+  try { created = await request<Section>('/sections', { method: 'POST', body: JSON.stringify({ name: state.title, location: state.bucket === 'Сегодня' ? 'today' : 'backlog' }) }) }
+  catch (error) {
+    if (!(error instanceof TypeError)) { state.error = (error as Error).message; return null }
+    const id = newId(), bucket = state.bucket === 'Сегодня' ? 'today' : 'backlog'
+    const payload = { operation: 'create', kind: 'section', id, title: state.title.trim(), bucket, position: state.sections.length }
+    const local: Section = { id, name: state.title.trim(), location: bucket, position: state.sections.length, version: 1 }
+    await queueTask('tasks.section', id, null, payload, false, local)
+    created = { id, name: state.title.trim(), location: bucket, position: state.sections.length, version: 1 }
+    queuedOffline = true; state.sections.push(created); await cacheRows('tasks.section', state.sections, true); state.error = 'Нет сети. Раздел сохранён и будет синхронизирован позже.'
+  }
+  state.title = ''; state.creating = false; if (!queuedOffline) await refresh(); state.sectionId = created.id
+  state.expanded[state.bucket].add(created.id)
+  return created
+}
+
+// ---------- detail inline editing ----------
+function startTitleEdit() {
+  if (!state.detail || state.detailEditing) return
+  finishDescEdit()
+  state.detailEditing = 'title'
+  nextTick(() => { const el = titleInputEl.value; if (el) { el.focus(); el.select() } })
+}
+function finishTitleEdit(save = true) {
+  if (state.detailEditing !== 'title') return
+  const task = state.detail
+  if (!task) { state.detailEditing = ''; return }
+  if (save) { const title = state.title.trim(); if (title && title !== task.title) { state.title = title; void saveDetail() } else { state.title = task.title; state.description = task.description } }
+  else { state.title = task.title; state.description = task.description }
+  state.detailEditing = ''
+}
+function startDescEdit() {
+  if (!state.detail || state.detailEditing) return
+  finishTitleEdit()
+  state.detailEditing = 'description'
+  nextTick(() => descriptionInputEl.value?.focus())
+}
+function finishDescEdit(save = true) {
+  if (state.detailEditing !== 'description') return
+  const task = state.detail
+  if (!task) { state.detailEditing = ''; return }
+  if (save) { if (state.description !== task.description) void saveDetail(); else state.title = task.title }
+  else { state.title = task.title; state.description = task.description }
+  state.detailEditing = ''
+}
+function detailMove() {
+  const task = state.detail; if (!task) return
+  if (isArchived(task)) void mutate(task, 'restore').then(() => flash('Возвращено в Backlog'))
+  else void moveTaskVia(task, isToday(task) ? 'backlog' : 'today')
+}
+
+// ---------- drag & reorder (pointer-based, order mode) ----------
+function validTaskDrop(moved: Task, target: Task | { projectId?: string }, place: 'row' | 'inside'): boolean {
+  if (!moved) return false
+  if (isLinked(moved)) {
+    if (place === 'inside') return (target as { projectId?: string }).projectId === moved.projectId
+    const t = target as Task
+    return isLinked(t) && t.projectId === moved.projectId
+  }
+  if (place === 'inside') return !(target as { projectId?: string }).projectId
+  return !isLinked(target as Task)
+}
+function onGroupsPointerDown(event: PointerEvent) {
+  if (event.button !== 0 || state.archive || !state.orderMode) return
+  const handle = (event.target as HTMLElement).closest<HTMLElement>('[data-drag-kind]')
+  if (!handle) return
+  event.preventDefault()
+  closeMenu()
+  const kind = handle.dataset.dragKind === 'section' ? 'section' : 'task'
+  const id = handle.dataset.dragId || ''
+  const row = kind === 'task' ? handle.closest<HTMLElement>('[data-task-id]') : handle.closest<HTMLElement>('[data-section-row-key]')
+  if (!row) return
+  const rect = row.getBoundingClientRect()
+  const label = kind === 'task' ? (taskById(id)?.title || '') : (state.sections.find(s => s.id === id)?.name || '')
+  drag = { kind, id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, row, target: null, place: '', started: false, ghost: null, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, width: rect.width, height: rect.height, label }
+  handle.setPointerCapture?.(event.pointerId)
+}
+function onGroupsPointerMove(event: PointerEvent) {
+  if (!drag || drag.pointerId !== event.pointerId) return
+  if (!drag.started && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 6) {
+    drag.started = true
+    drag.row.classList.add('task-drag-source')
+    const ghost = document.createElement('div')
+    ghost.className = 'reorder-ghost'
+    ghost.textContent = drag.label
+    ghost.style.width = `${drag.width}px`; ghost.style.height = `${drag.height}px`
+    document.body.append(ghost)
+    drag.ghost = ghost
+  }
+  if (!drag.started) return
+  event.preventDefault()
+  const bounds = scrollEl.value?.getBoundingClientRect()
+  if (bounds && drag.ghost) {
+    const pad = 4
+    drag.ghost.style.left = `${Math.max(bounds.left + pad, Math.min(event.clientX - drag.offsetX, bounds.right - drag.width - pad))}px`
+    drag.ghost.style.top = `${Math.max(bounds.top + pad, Math.min(event.clientY - drag.offsetY, bounds.bottom - drag.height - pad))}px`
+  }
+  clearDragMarks()
+  drag.target = null; drag.place = ''
+  const hit = document.elementFromPoint(event.clientX, event.clientY)
+  if (!hit) return
+  if (drag.kind === 'task') {
+    const taskRow = hit.closest<HTMLElement>('[data-task-id]')
+    if (taskRow && taskRow.dataset.taskId !== drag.id) {
+      const target = taskById(taskRow.dataset.taskId || ''), moved = taskById(drag.id)
+      if (!target || !moved || !validTaskDrop(moved, target, 'row')) return
+      const rect = taskRow.getBoundingClientRect()
+      drag.target = taskRow; drag.place = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+      taskRow.classList.add(drag.place === 'before' ? 'task-drop-before' : 'task-drop-after')
+      return
+    }
+    const sectionRow = hit.closest<HTMLElement>('[data-section-row-key]')
+    if (sectionRow && sectionRow.dataset.dragKey !== `project:${drag.id}`) {
+      const moved = taskById(drag.id)
+      if (!moved || !validTaskDrop(moved, { projectId: sectionRow.dataset.sectionProject || undefined }, 'inside')) return
+      drag.target = sectionRow; drag.place = 'inside'
+      sectionRow.classList.add('task-drop-inside')
+    }
+    return
+  }
+  const sectionRow = hit.closest<HTMLElement>('[data-section-row-key]')
+  if (!sectionRow || sectionRow.dataset.sectionProject || sectionRow.dataset.dragKey === `section:${drag.id}`) return
+  const rect = sectionRow.getBoundingClientRect()
+  drag.target = sectionRow; drag.place = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+  sectionRow.classList.add(drag.place === 'before' ? 'task-drop-before' : 'task-drop-after')
+}
+async function finishDrag(event: PointerEvent) {
+  if (!drag || drag.pointerId !== event.pointerId) return
+  const current = drag
+  clearGhost(); clearDragMarks(); drag = null
+  if (!current.started || !current.target || !current.place) return
+  if (current.kind === 'section') {
+    const targetKey = current.target.dataset.dragKey || ''
+    const targetId = targetKey.startsWith('section:') ? targetKey.slice(8) : ''
+    if (!targetId) return
+    await dropSection(current.id, targetId, current.place === 'after')
+    return
+  }
+  const moved = taskById(current.id)
+  if (!moved) return
+  if (current.place === 'inside') {
+    const key = current.target.dataset.dragKey || ''
+    if (key.startsWith('project:')) {
+      const projectId = key.slice(8)
+      const items = state.tasks.filter(t => t.projectId === projectId).sort((a, b) => a.position - b.position)
+      const last = items[items.length - 1]
+      if (last && last.id !== moved.id) await reorderProjectTasks(projectId, moved.id, last.id)
+    } else {
+      const sectionId = current.target.dataset.dragId || ''
+      if (sectionId && sectionId !== (moved.sectionId || '')) await moveTaskSection(moved, sectionId)
+    }
+    return
+  }
+  const target = taskById(current.target.dataset.taskId || '')
+  if (!target) return
+  if (isLinked(moved) && isLinked(target) && target.projectId === moved.projectId) { await reorderProjectTasks(moved.projectId!, moved.id, target.id); return }
+  if (isLinked(moved) || isLinked(target)) return
+  const targetSectionId = target.sectionId || ''
+  if ((moved.sectionId || '') === targetSectionId) { await dropTaskBefore(targetSectionId, moved.id, target.id); return }
+  if (targetSectionId) {
+    await moveTaskSection(moved, targetSectionId)
+    const fresh = taskById(moved.id)
+    if (fresh) await dropTaskBefore(targetSectionId, fresh.id, target.id)
+  } else {
+    await mutate(moved, 'section', 'PUT', { expectedVersion: moved.version, sectionId: null as unknown as string })
+    const fresh = taskById(moved.id)
+    if (fresh) await dropTaskBefore('', fresh.id, target.id)
+  }
+}
+function onGroupsPointerCancel(event: PointerEvent) {
+  if (!drag || drag.pointerId !== event.pointerId) return
+  clearGhost(); clearDragMarks(); drag = null
+}
+function clearGhost() { if (drag?.row) drag.row.classList.remove('task-drag-source'); drag?.ghost?.remove(); if (drag) drag.ghost = null }
+function clearDragMarks() { groupsEl.value?.querySelectorAll('.task-drop-inside,.task-drop-before,.task-drop-after').forEach(el => el.classList.remove('task-drop-inside', 'task-drop-before', 'task-drop-after')) }
+
+// ---------- API / offline (unchanged semantics) ----------
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${api}${path}`, { ...init, headers: { 'Content-Type': 'application/json', ...init?.headers } })
   if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || `Запрос не выполнен (${response.status})`) }
@@ -28,7 +587,7 @@ async function queueTask(type: 'tasks.task' | 'tasks.section', id: string, versi
   const tail = pending[pending.length - 1]
   const expectedVersion = tail ? (tail.expectedVersion === null ? 1 : tail.expectedVersion + 1) : version
   const payloadWithVersion = { ...payload, ...(expectedVersion === null ? {} : { expectedVersion }) }
-    const operationId = newId(), now = new Date().toISOString()
+  const operationId = newId(), now = new Date().toISOString()
   const entity: OfflineEntity = { type, id, version: expectedVersion === null ? 1 : expectedVersion + 1, payload: viewPayload ?? payloadWithVersion, deleted, updatedAt: now }
   const operation: SyncOperation = { operationId, type, id, expectedVersion, kind: deleted ? 'delete' : 'upsert', payload: payloadWithVersion, createdAt: now }
   await saveOfflineMutation(entity, operation)
@@ -88,79 +647,13 @@ async function refresh() {
       catch { const rows = await (await getOfflineStore()).listEntities('planning.project.view'); state.projects = rows.filter(x => !x.deleted).map(x => x.payload as ProjectLabel) }
     }
     state.detail = detail
-    if (state.detail) { state.bucket = state.detail.location === 'today' || state.detail.location === 'Today' ? 'Сегодня' : 'Backlog'; state.title = state.detail.title; state.description = state.detail.description }
+    if (state.detail) {
+      state.bucket = state.detail.location === 'today' || state.detail.location === 'Today' ? 'Сегодня' : 'Backlog'
+      if (!state.detailEditing) { state.title = state.detail.title; state.description = state.detail.description }
+    }
     if (sections.length && !sections.some(x => x.id === state.sectionId)) state.sectionId = sections[0].id
   } catch (error) { state.error = (error as Error).message }
   finally { state.busy = false }
-}
-function openTask(task: Task) { if (!state.orderMode && Date.now() >= suppressOpenUntil) void router.push(`/tasks/${task.id}`) }
-let holdTimer = 0, pointerStart: { x: number; y: number; taskId: string; sectionId: string } | null = null, suppressOpenUntil = 0
-function contextPointerDown(event: PointerEvent, taskId = '', sectionId = '') {
-  if (state.orderMode || event.pointerType !== 'touch') return
-  pointerStart = { x: event.clientX, y: event.clientY, taskId, sectionId }
-  holdTimer = window.setTimeout(() => { if (taskId) state.contextTaskId = taskId; else state.contextSectionId = sectionId; suppressOpenUntil = Date.now() + 450 }, 550)
-}
-function contextPointerMove(event: PointerEvent) {
-  if (!pointerStart) return
-  const dx = event.clientX - pointerStart.x, dy = event.clientY - pointerStart.y
-  if (Math.abs(dx) > 8 || Math.abs(dy) > 8) window.clearTimeout(holdTimer)
-  if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) && dx < 0) {
-    if (pointerStart.taskId) state.contextTaskId = pointerStart.taskId
-    else state.contextSectionId = pointerStart.sectionId
-    suppressOpenUntil = Date.now() + 450
-  }
-}
-function contextPointerUp() { window.clearTimeout(holdTimer); pointerStart = null }
-async function createTask() {
-  if (!state.title.trim()) return
-  let created: Task, queuedOffline = false, moveError = ''
-  try { created = await request<Task>('', { method: 'POST', body: JSON.stringify({ title: state.title, description: state.description, projectId: null, milestoneId: null, featureId: null, sectionId: state.bucket === 'Backlog' ? (state.sectionId || null) : null }) }) }
-  catch (error) {
-    if (!(error instanceof TypeError)) throw error
-    const id = newId(), sectionId = state.bucket === 'Backlog' ? state.sectionId || state.sections[0]?.id || null : null
-    const payload = { operation: 'create', kind: 'task', id, title: state.title.trim(), description: state.description, placement: 'backlog', workStatus: 'new', sectionId }
-    const local: Task = { id, title: state.title.trim(), description: state.description, location: 'backlog', workStatus: 'new', sectionId: sectionId || undefined, position: state.tasks.length, version: 1 }
-    await queueTask('tasks.task', id, null, payload, false, local)
-    created = { id, title: state.title.trim(), description: state.description, location: 'backlog', workStatus: 'new', sectionId: sectionId || undefined, position: state.tasks.length, version: 1 }
-    queuedOffline = true
-    state.tasks.push(created); await cacheRows('tasks.task', state.tasks, true); state.error = 'Нет сети. Задача сохранена и будет синхронизирована позже.'
-  }
-  if (state.bucket === 'Сегодня') {
-    if (queuedOffline) {
-      const backlogTask = created
-      created = { ...created, location: 'today', version: created.version + 1 }
-      await queueTask('tasks.task', backlogTask.id, backlogTask.version, { operation: 'move', kind: 'task', id: backlogTask.id, expectedVersion: backlogTask.version, placement: 'today', workStatus: 'new', sectionId: null }, false, created)
-      state.tasks = state.tasks.map(x => x.id === created.id ? created : x)
-      await cacheRows('tasks.task', state.tasks, true)
-    } else {
-      try { await request(`/${created.id}/today`, { method: 'POST', body: JSON.stringify({ expectedVersion: created.version }) }) }
-      catch (error) {
-        if (error instanceof TypeError) {
-          const todayTask = { ...created, location: 'today', version: created.version + 1 }
-          await queueTask('tasks.task', created.id, created.version, { operation: 'move', kind: 'task', id: created.id, expectedVersion: created.version, placement: 'today', workStatus: 'new', sectionId: null }, false, todayTask)
-          state.tasks = state.tasks.map(x => x.id === created.id ? todayTask : x); state.error = 'Нет сети. Создание сохранено, перенос на Сегодня будет синхронизирован позже.'
-        } else moveError = (error as Error).message
-      }
-    }
-  }
-  state.title = ''; state.description = ''; state.creating = false
-  if (moveError) { state.bucket = 'Backlog'; await refresh(); state.error = `Задача создана в Backlog, но не перенесена на Сегодня: ${moveError}` }
-  else if (!queuedOffline) await refresh()
-}
-async function createSection() {
-  if (!state.title.trim()) return
-  let created: Section, queuedOffline = false
-  try { created = await request<Section>('/sections', { method: 'POST', body: JSON.stringify({ name: state.title, location: state.bucket === 'Сегодня' ? 'today' : 'backlog' }) }) }
-  catch (error) {
-    if (!(error instanceof TypeError)) { state.error = (error as Error).message; return }
-    const id = newId(), bucket = state.bucket === 'Сегодня' ? 'today' : 'backlog'
-    const payload = { operation: 'create', kind: 'section', id, title: state.title.trim(), bucket, position: state.sections.length }
-    const local: Section = { id, name: state.title.trim(), location: bucket, position: state.sections.length, version: 1 }
-    await queueTask('tasks.section', id, null, payload, false, local)
-    created = { id, name: state.title.trim(), location: bucket, position: state.sections.length, version: 1 }
-    queuedOffline = true; state.sections.push(created); await cacheRows('tasks.section', state.sections, true); state.error = 'Нет сети. Раздел сохранён и будет синхронизирован позже.'
-  }
-  state.title = ''; state.creatingSection = false; if (!queuedOffline) await refresh(); state.sectionId = created.id
 }
 async function mutate(task: Task, suffix: string, method = 'POST', body: object = { expectedVersion: task.version }) {
   try { await request(`/${task.id}/${suffix}`, { method, body: JSON.stringify(body) }); await refresh() } catch (error) {
@@ -191,46 +684,7 @@ async function saveDetail() {
     state.error = 'Нет сети. Изменение сохранено и будет синхронизировано позже.'
   }
 }
-async function setStatus(task: Task) {
-  const current = statusName(task.workStatus), next = current === 'New' ? 'inProgress' : current === 'InProgress' ? 'done' : 'new'
-  await mutate(task, 'status', 'PUT', { expectedVersion: task.version, status: next })
-}
-function archiveTask(task: Task) {
-  if (window.confirm(`Убрать «${task.title}» в архив?`)) void mutate(task, 'archive')
-}
-async function deleteTask(task: Task) {
-  if (!window.confirm(`Удалить «${task.title}» без возможности восстановления?`)) return
-  try { await request(`/${task.id}`, { method: 'DELETE', body: JSON.stringify({ expectedVersion: task.version }) }); await refresh() }
-  catch (error) {
-    if (error instanceof TypeError) {
-      await queueTask('tasks.task', task.id, task.version, { operation: 'delete', kind: 'task', id: task.id, expectedVersion: task.version }, true)
-      state.tasks = state.tasks.filter(x => x.id !== task.id); if (state.detail?.id === task.id) state.detail = null
-      await cacheRows('tasks.task', state.tasks, true); state.error = 'Нет сети. Удаление сохранено и будет синхронизировано позже.'; return
-    }
-    state.error = (error as Error).message
-  }
-}
-function statusName(status: string) { return ({ '0': 'New', '1': 'InProgress', '2': 'Done', 'new': 'New', 'inProgress': 'InProgress', 'done': 'Done', 'New': 'New', 'InProgress': 'InProgress', 'Done': 'Done' } as Record<string, string>)[String(status)] || String(status) }
-function label(status: string) { return ({ New: 'Новая', InProgress: 'В работе', Done: 'Готово' } as Record<string, string>)[statusName(status)] || status }
-function selectBucket(bucket: 'Backlog' | 'Сегодня') { state.bucket = bucket; state.archive = false; state.orderMode = false; state.contextTaskId = ''; state.contextSectionId = ''; state.filter = 'all'; state.detail = null; state.title = ''; state.description = ''; void router.replace('/tasks').then(refresh) }
-function toggleAllSections() { const ids = state.sections.map(x => x.id), open = state.expanded[state.bucket].size === ids.length && ids.length > 0; state.expanded[state.bucket] = new Set(open ? [] : ids) }
-function toggleSection(id: string) { const open = state.expanded[state.bucket]; open.has(id) ? open.delete(id) : open.add(id) }
 async function moveTaskSection(task: Task, sectionId: string) { await mutate(task, 'section', 'PUT', { expectedVersion: task.version, sectionId }) }
-async function reorderTasks(sectionId: string, task: Task, delta: number) {
-  const items = state.tasks.filter(x => x.sectionId === sectionId).sort((a, b) => a.position - b.position), at = items.findIndex(x => x.id === task.id), other = at + delta
-  if (other < 0 || other >= items.length) return
-  ;[items[at], items[other]] = [items[other], items[at]]
-  const order = items.map(x => ({ id: x.id, expectedVersion: x.version }))
-  try { await request('/order', { method: 'PUT', body: JSON.stringify({ location: location.value, sectionId, items: order }) }); await refresh() }
-  catch (error) {
-    if (error instanceof TypeError) {
-      await queueTask('tasks.task', task.id, task.version, { operation: 'reorder', kind: 'task', id: task.id, expectedVersion: task.version, bucket: location.value.toLowerCase(), sectionId, order }, false, { ...task, position: items.findIndex(x => x.id === task.id), version: task.version + 1 })
-      state.tasks = state.tasks.map(x => { const index = items.findIndex(i => i.id === x.id); return index < 0 ? x : { ...x, position: index, version: x.version + 1 } }); await cacheRows('tasks.task', state.tasks, true)
-      state.error = 'Нет сети. Порядок сохранён и будет синхронизирован позже.'; return
-    }
-    state.error = (error as Error).message
-  }
-}
 async function reorderProjectTasks(projectId: string, sourceId: string, targetId: string) {
   if (sourceId === targetId) return
   const items = state.tasks.filter(x => x.projectId === projectId).sort((a, b) => a.position - b.position), from = items.findIndex(x => x.id === sourceId), to = items.findIndex(x => x.id === targetId)
@@ -248,13 +702,9 @@ async function reorderProjectTasks(projectId: string, sourceId: string, targetId
     state.error = (error as Error).message
   }
 }
-async function reorderProjectByDelta(projectId: string, task: Task, delta: number) {
-  const items = state.tasks.filter(x => x.projectId === projectId).sort((a, b) => a.position - b.position), index = items.findIndex(x => x.id === task.id), target = items[index + delta]
-  if (target) await reorderProjectTasks(projectId, task.id, target.id)
-}
 async function dropTaskBefore(sectionId: string, sourceId: string, targetId: string) {
   if (sourceId === targetId) return
-  const items = state.tasks.filter(x => x.sectionId === sectionId).sort((a, b) => a.position - b.position), from = items.findIndex(x => x.id === sourceId), to = items.findIndex(x => x.id === targetId)
+  const items = state.tasks.filter(x => (x.sectionId || '') === sectionId).sort((a, b) => a.position - b.position), from = items.findIndex(x => x.id === sourceId), to = items.findIndex(x => x.id === targetId)
   if (from < 0 || to < 0) return
   const [moved] = items.splice(from, 1); items.splice(to, 0, moved)
   try { await request('/order', { method: 'PUT', body: JSON.stringify({ location: location.value, sectionId, items: items.map(x => ({ id: x.id, expectedVersion: x.version })) }) }); await refresh() }
@@ -268,11 +718,13 @@ async function dropTaskBefore(sectionId: string, sourceId: string, targetId: str
     state.error = (error as Error).message
   }
 }
-async function dropSection(sourceId: string, targetId: string) {
-  if (sourceId === targetId) return
+async function dropSection(sourceId: string, targetId: string, after = false) {
+  if (sourceId === targetId && !after) return
   const sections = [...state.sections], from = sections.findIndex(x => x.id === sourceId), to = sections.findIndex(x => x.id === targetId)
   if (from < 0 || to < 0) return
-  const [moved] = sections.splice(from, 1); sections.splice(to, 0, moved)
+  const [moved] = sections.splice(from, 1)
+  const to2 = sections.findIndex(x => x.id === targetId)
+  sections.splice(to2 + (after ? 1 : 0), 0, moved)
   try { await request('/sections/order', { method: 'PUT', body: JSON.stringify({ location: location.value, expectedVersion: Math.max(...sections.map(x => x.version)), ids: sections.map(x => x.id) }) }); await refresh() }
   catch (error) {
     if (error instanceof TypeError) {
@@ -283,98 +735,173 @@ async function dropSection(sourceId: string, targetId: string) {
     state.error = (error as Error).message
   }
 }
-function dragTaskId(event: DragEvent, id: string) { event.dataTransfer?.setData('text/plain', `task:${id}`) }
-function onSectionDrop(event: DragEvent, targetId: string) {
-  const source = event.dataTransfer?.getData('text/plain') || ''
-  if (source.startsWith('section:')) void dropSection(source.slice(8), targetId)
-  else if (source.startsWith('task:')) { const task = state.tasks.find(x => x.id === source.slice(5)); if (task) void moveTaskSection(task, targetId) }
-}
-async function renameSection(section: Section) {
-  const name = window.prompt('Название раздела', section.name)?.trim(); if (!name || name === section.name) return
-  try { await request(`/sections/${section.id}`, { method: 'PUT', body: JSON.stringify({ expectedVersion: section.version, name }) }); await refresh() }
-  catch (error) {
-    if (error instanceof TypeError) {
-      const local = { ...section, name, version: section.version + 1 }
-      await queueTask('tasks.section', section.id, section.version, { operation: 'update', kind: 'section', id: section.id, expectedVersion: section.version, title: name, bucket: section.location }, false, local)
-      state.sections = state.sections.map(x => x.id === section.id ? local : x); state.error = 'Нет сети. Изменение сохранено и будет синхронизировано позже.'; return
-    }
-    state.error = (error as Error).message
-  }
-}
-async function deleteSection(section: Section) {
-  if (!window.confirm(`Удалить раздел «${section.name}»? Сначала перенесите его задачи в другой раздел.`)) return
-  try { await request(`/sections/${section.id}`, { method: 'DELETE', body: JSON.stringify({ expectedVersion: section.version }) }); await refresh() }
-  catch (error) {
-    if (error instanceof TypeError) {
-      await queueTask('tasks.section', section.id, section.version, { operation: 'delete', kind: 'section', id: section.id, bucket: section.location }, true)
-      state.sections = state.sections.filter(x => x.id !== section.id); await cacheRows('tasks.section', state.sections, true); state.error = 'Нет сети. Удаление сохранено и будет синхронизировано позже.'; return
-    }
-    state.error = (error as Error).message
-  }
-}
-async function reorderSection(section: Section, delta: number) {
-  const at = state.sections.findIndex(x => x.id === section.id), other = at + delta; if (other < 0 || other >= state.sections.length) return
-  const ids = state.sections.map(x => x.id); [ids[at], ids[other]] = [ids[other], ids[at]]
-  try { await request('/sections/order', { method: 'PUT', body: JSON.stringify({ location: location.value, expectedVersion: Math.max(...state.sections.map(x => x.version)), ids }) }); await refresh() }
-  catch (error) {
-    if (error instanceof TypeError) {
-      const order = ids.map(id => { const value = state.sections.find(x => x.id === id)!; return { id, expectedVersion: value.version } })
-      await queueTask('tasks.section', section.id, section.version, { operation: 'reorder', kind: 'section', id: section.id, expectedVersion: section.version, bucket: location.value.toLowerCase(), order }, false, { ...section, position: ids.indexOf(section.id), version: section.version + 1 })
-      state.sections = ids.map((id, position) => ({ ...state.sections.find(x => x.id === id)!, position, version: state.sections.find(x => x.id === id)!.version + 1 })); await cacheRows('tasks.section', state.sections, true)
-      state.error = 'Нет сети. Порядок сохранён и будет синхронизирован позже.'; return
-    }
-    state.error = (error as Error).message
-  }
-}
+
 watch(() => route.fullPath, () => void refresh())
-onMounted(refresh)
+onMounted(() => {
+  document.addEventListener('pointerdown', onDocPointerDown, true)
+  document.addEventListener('keydown', onDocKeyDown)
+  void refresh()
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocPointerDown, true)
+  document.removeEventListener('keydown', onDocKeyDown)
+  clearTimeout(toastTimer)
+  if (swipe?.timer) window.clearTimeout(swipe.timer)
+  clearGhost(); drag = null
+})
 </script>
 
 <template>
-  <section class="tracker-page" aria-labelledby="tasks-heading">
-    <div class="tracker-tabs" role="tablist" aria-label="Режим задач"><button class="task-tab" :class="{ active: !state.archive && state.bucket === 'Backlog' }" @click="selectBucket('Backlog')">Backlog</button><button class="task-tab" :class="{ active: !state.archive && state.bucket === 'Сегодня' }" @click="selectBucket('Сегодня')">Сегодня</button><div class="tab-spacer"/><button v-if="!state.archive" class="task-toolbar-icon" aria-label="Свернуть все разделы" @click="toggleAllSections">⌄</button><button v-if="!state.archive" class="task-toolbar-icon" :class="{ active: state.orderMode }" :aria-pressed="state.orderMode" :aria-label="state.orderMode ? 'Готово' : 'Сортировка'" @click="state.orderMode = !state.orderMode">⇵</button><button v-if="!state.archive" class="task-toolbar-icon" aria-label="Создать задачу или раздел" @click="state.creating = !state.creating">＋</button></div>
-    <div v-if="state.archive" class="task-archive-top"><button class="task-archive-back" @click="state.archive = false; void refresh()">← Назад</button><div class="task-archive-title">Архив</div></div>
-    <div v-if="state.error" class="tracker-error" role="alert">{{ state.error }} <button @click="state.error = ''">×</button></div>
-    <form v-if="state.creating || state.creatingSection" class="tracker-editor" @submit.prevent="state.creating ? createTask() : createSection()">
-      <label>{{ state.creatingSection ? 'Название раздела' : 'Название задачи' }}<input v-model="state.title" autofocus maxlength="160" required /></label>
-      <label v-if="state.creating">Описание<textarea v-model="state.description" rows="3" /></label>
-      <label v-if="state.creating && state.sections.length">Раздел<select v-model="state.sectionId"><option v-for="item in state.sections" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
-      <div class="editor-actions"><button type="button" class="quiet-button" @click="state.creating = false; state.creatingSection = false">Отмена</button><button class="primary-button">Создать</button></div>
-    </form>
-      <div v-if="state.detail" class="task-detail-card">
-      <button class="back-link" @click="router.push('/tasks')">← Все задачи</button>
-      <label>Название<input v-model="state.title" maxlength="160" /></label><label>Описание<textarea v-model="state.description" rows="7" /></label>
-      <div class="detail-actions"><button class="primary-button" @click="saveDetail">Сохранить</button><button v-if="state.detail.location === 'archived' || state.detail.location === 'Archived'" class="quiet-button" @click="mutate(state.detail!, 'restore')">Восстановить</button><template v-else><button class="quiet-button" @click="mutate(state.detail!, state.detail!.location === 'today' || state.detail!.location === 'Today' ? 'backlog' : 'today')">Перенести {{ state.detail.location === 'today' || state.detail.location === 'Today' ? 'в Backlog' : 'на сегодня' }}</button><button class="quiet-button" @click="archiveTask(state.detail!)">В архив</button></template><button class="quiet-button" @click="deleteTask(state.detail!)">Удалить</button><RouterLink class="quiet-button" :to="chatRoute({ entityType: 'tasks.task', entityId: state.detail.id, entityVersion: state.detail.version })">Обсудить в чате</RouterLink></div>
-    </div>
-    <div v-else class="tracker-board">
-      <div v-if="location === 'Today'" class="task-filters"><button v-for="filter in ['all','New','InProgress','Done']" :key="filter" :class="{ active: state.filter === filter }" @click="state.filter = filter">{{ filter === 'all' ? 'Все' : label(filter) }}</button></div>
-      <div v-if="state.busy" class="board-empty">Загружаем задачи…</div>
-      <div v-else-if="!filtered.length" class="board-empty">Здесь пока нет задач.</div>
-      <div v-else-if="state.archive" class="task-section archive-list"><div v-for="task in filtered" :key="task.id" class="task-row" @contextmenu.prevent="state.contextTaskId = task.id" @pointerdown="contextPointerDown($event, task.id)" @pointermove="contextPointerMove" @pointerup="contextPointerUp" @pointercancel="contextPointerUp"><button class="task-title" @click="openTask(task)">{{ task.title }}</button><span class="task-placement">Архив</span><button class="quiet-button" @click="mutate(task, 'restore')">Восстановить</button><button class="quiet-button" @click="deleteTask(task)">Удалить</button></div></div>
-      <section v-else v-for="section in state.sections" :key="section.id" class="task-section">
-        <header @contextmenu.prevent="state.contextSectionId = section.id" @pointerdown="contextPointerDown($event, '', section.id)" @pointermove="contextPointerMove" @pointerup="contextPointerUp" @pointercancel="contextPointerUp" @dragover.prevent="state.orderMode && $event.preventDefault()" @drop.prevent="state.orderMode && onSectionDrop($event, section.id)"><h2><button class="quiet-button collapse-toggle" :aria-expanded="state.expanded[state.bucket].has(section.id)" @click="toggleSection(section.id)">{{ state.expanded[state.bucket].has(section.id) ? '⌄' : '›' }}</button>{{ section.name }}</h2><span>{{ filtered.filter(task => task.sectionId === section.id).length }}</span><button v-if="state.orderMode" class="quiet-button drag-handle" draggable="true" @dragstart="$event.dataTransfer?.setData('text/plain', `section:${section.id}`)" aria-label="Перетащить раздел">⠿</button><button class="quiet-button" @click="renameSection(section)">Переименовать</button><button v-if="state.orderMode" class="quiet-button" @click="reorderSection(section, -1)" aria-label="Раздел выше">↑</button><button v-if="state.orderMode" class="quiet-button" @click="reorderSection(section, 1)" aria-label="Раздел ниже">↓</button><button class="quiet-button" @click="state.sectionId = section.id; state.creating = true">＋</button></header>
-        <div v-if="state.contextSectionId === section.id" class="context-actions"><button class="quiet-button" @click="renameSection(section); state.contextSectionId = ''">Переименовать</button><button class="quiet-button" @click="toggleSection(section.id); state.contextSectionId = ''">Свернуть / раскрыть</button><button class="quiet-button" @click="deleteSection(section); state.contextSectionId = ''">Удалить раздел</button></div>
-        <template v-if="state.expanded[state.bucket].has(section.id)">
-        <div v-for="task in filtered.filter(item => item.sectionId === section.id)" :key="task.id" class="task-row" @contextmenu.prevent="state.contextTaskId = task.id" @pointerdown="contextPointerDown($event, task.id)" @pointermove="contextPointerMove" @pointerup="contextPointerUp" @pointercancel="contextPointerUp" @dragover.prevent="state.orderMode && $event.preventDefault()" @drop.prevent="state.orderMode && dropTaskBefore(section.id, ($event.dataTransfer?.getData('text/plain') || '').replace('task:', ''), task.id)">
-          <button class="task-title" @click="openTask(task)">{{ task.title }}</button><span v-if="location === 'Today'" class="task-status" :class="`status-${statusName(task.workStatus).toLowerCase()}`">{{ label(task.workStatus) }}</span>
-          <select v-if="!task.projectId && state.sections.length > 1" :value="task.sectionId" aria-label="Раздел задачи" @change="moveTaskSection(task, ($event.target as HTMLSelectElement).value)"><option v-for="item in state.sections" :key="item.id" :value="item.id">{{ item.name }}</option></select>
-          <button v-if="state.orderMode && !task.projectId" class="quiet-button drag-handle" draggable="true" @dragstart="dragTaskId($event, task.id)" aria-label="Перетащить задачу">⠿</button><button v-if="state.orderMode && !task.projectId" class="quiet-button" @click="reorderTasks(section.id, task, -1)" aria-label="Задача выше">↑</button><button v-if="state.orderMode && !task.projectId" class="quiet-button" @click="reorderTasks(section.id, task, 1)" aria-label="Задача ниже">↓</button>
-          <button v-if="location === 'Today'" class="quiet-button" @click="setStatus(task)">{{ statusName(task.workStatus) === 'Done' ? 'Вернуть' : 'Следующий статус' }}</button>
-          <button class="quiet-button" @dragover.prevent="state.orderMode && $event.preventDefault()" @drop.prevent="state.orderMode && dropTaskBefore(section.id, $event.dataTransfer?.getData('text/plain') || '', task.id)" @click="mutate(task, location === 'Today' ? 'backlog' : 'today')">{{ location === 'Today' ? 'Backlog' : 'Сегодня' }}</button><button class="quiet-button" @click="deleteTask(task)">Удалить</button>
-          <div v-if="state.contextTaskId === task.id" class="context-actions"><button class="quiet-button" @click="openTask(task); state.contextTaskId = ''">Открыть</button><button class="quiet-button" @click="mutate(task, location === 'Today' ? 'backlog' : 'today'); state.contextTaskId = ''">{{ location === 'Today' ? 'Backlog' : 'Сегодня' }}</button><button v-if="task.projectId && task.location === 'backlog'" class="quiet-button" @click="mutate(task, 'planning'); state.contextTaskId = ''">Вернуть в планирование</button><button class="quiet-button" @click="archiveTask(task); state.contextTaskId = ''">В архив</button></div>
+  <section class="tasks-section" ref="rootEl" aria-labelledby="tasks-heading" @click.capture="suppressCapture">
+    <div v-if="state.error" class="task-error" role="alert">{{ state.error }} <button :aria-label="'Закрыть'" @click="state.error = ''">×</button></div>
+
+    <section v-if="state.detail" class="scroll task-detail">
+      <div class="task-detail-top">
+        <button type="button" class="doc-action doc-back task-detail-back" @click="closeDetail">← Назад</button>
+      </div>
+      <div class="task-detail-meta"><span class="task-detail-section">{{ detailOrigin }}</span></div>
+      <div class="task-detail-title-wrap">
+        <button v-if="state.detailEditing !== 'title'" type="button" class="task-title-open" @click="startTitleEdit">{{ state.detail.title }}</button>
+        <input v-else ref="titleInputEl" v-model="state.title" class="task-title-detail-input" type="text" maxlength="160" @keydown.enter.prevent="finishTitleEdit(true)" @keydown.esc.prevent="finishTitleEdit(false)" @blur="finishTitleEdit(true)" @click.stop />
+      </div>
+      <div class="task-detail-description-card">
+        <div v-if="state.detailEditing !== 'description'" class="task-description" @click="startDescEdit">{{ state.detail.description || 'Описание пока не добавлено.' }}</div>
+        <textarea v-else ref="descriptionInputEl" v-model="state.description" class="task-description-input" @keydown.esc.prevent="finishDescEdit(false)" @blur="finishDescEdit(true)" @click.stop></textarea>
+      </div>
+      <div class="task-detail-bottom-actions">
+        <button type="button" class="task-detail-pill action-move" @click="detailMove">{{ detailMoveLabel }}</button>
+        <button v-if="isToday(state.detail)" type="button" class="task-detail-pill action-status" :class="workState(state.detail.workStatus)" @click="advanceTask(state.detail)">{{ workLabel(state.detail.workStatus) }}</button>
+        <button v-if="!isArchived(state.detail)" type="button" class="task-delete-icon" aria-label="Убрать задачу в архив" @click="archiveTask(state.detail)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m6 7 1 13h10l1-13"/><path d="M10 11v5M14 11v5"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <div v-else class="task-board">
+      <div v-if="!state.archive" class="task-toolbar">
+        <div class="task-tabs" role="tablist" aria-label="Режим задач">
+          <button type="button" class="task-tab" :class="{ active: state.bucket === 'Backlog' }" @click="selectBucket('Backlog')">Backlog</button>
+          <button type="button" class="task-tab" :class="{ active: state.bucket === 'Сегодня' }" @click="selectBucket('Сегодня')">Сегодня</button>
         </div>
-        </template>
-      </section>
-      <section v-for="group in linkedGroups" :key="group.projectId" class="task-section linked-section">
-        <header><h2>◆ {{ group.title }}</h2><span>{{ group.tasks.length }}</span></header>
-        <div v-for="(task, index) in group.tasks" :key="task.id" class="task-row" @contextmenu.prevent="state.contextTaskId = task.id" @pointerdown="contextPointerDown($event, task.id)" @pointermove="contextPointerMove" @pointerup="contextPointerUp" @pointercancel="contextPointerUp" @dragover.prevent="state.orderMode && $event.preventDefault()" @drop.prevent="state.orderMode && reorderProjectTasks(group.projectId, ($event.dataTransfer?.getData('text/plain') || '').replace('project-task:', ''), task.id)">
-          <button class="task-title" @click="openTask(task)"><span class="project-diamond" aria-hidden="true">◆</span>{{ task.title }}</button><span v-if="location === 'Today'" class="task-status">{{ label(task.workStatus) }}</span>
-          <button v-if="state.orderMode" class="quiet-button drag-handle" draggable="true" aria-label="Перетащить задачу проекта" @dragstart="$event.dataTransfer?.setData('text/plain', `project-task:${task.id}`)">⠿</button><button v-if="state.orderMode" class="quiet-button" :disabled="index === 0" aria-label="Задача выше" @click="reorderProjectByDelta(group.projectId, task, -1)">↑</button><button v-if="state.orderMode" class="quiet-button" :disabled="index === group.tasks.length - 1" aria-label="Задача ниже" @click="reorderProjectByDelta(group.projectId, task, 1)">↓</button>
-          <button class="quiet-button" @click="mutate(task, location === 'Today' ? 'backlog' : 'today')">{{ location === 'Today' ? 'Backlog' : 'Сегодня' }}</button><button v-if="task.location === 'backlog'" class="quiet-button" @click="mutate(task, 'planning')">Вернуть в планирование</button><button class="quiet-button" @click="deleteTask(task)">Удалить</button>
-          <div v-if="state.contextTaskId === task.id" class="context-actions"><button v-if="task.location === 'backlog'" class="quiet-button" @click="mutate(task, 'planning'); state.contextTaskId = ''">Вернуть в планирование</button><button class="quiet-button" @click="archiveTask(task); state.contextTaskId = ''">В архив</button></div>
+        <div class="task-toolbar-actions">
+          <button type="button" class="task-icon-button" :aria-label="allOpen ? 'Свернуть все разделы' : 'Развернуть все разделы'" :title="allOpen ? 'Свернуть все разделы' : 'Развернуть все разделы'" @click="toggleAllSections">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path :d="allOpen ? 'M5 3 10 8 15 3' : 'M5 8 10 3 15 8'"/><path :d="allOpen ? 'M5 17 10 12 15 17' : 'M5 12 10 17 15 12'"/></svg>
+          </button>
+          <button type="button" class="order-mode-toggle" :aria-pressed="state.orderMode" :aria-label="state.orderMode ? 'Выключить сортировку' : 'Включить сортировку'" :title="state.orderMode ? 'Выключить сортировку' : 'Включить сортировку'" @click="toggleOrderMode">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M4 12h11M4 17h11M19 6v12m-2.5-2.5L19 18l2.5-2.5"/></svg>
+          </button>
+          <button type="button" class="plus" aria-label="Создать задачу или раздел" @click="openCreateSheet">＋</button>
         </div>
-      </section>
-      <div v-if="!state.archive" class="task-archive-bar"><button class="task-archive-link" @click="state.archive = true; state.orderMode = false; state.filter = 'all'; state.detail = null; void refresh()">Архив</button></div>
+      </div>
+
+      <div v-if="state.archive" class="task-archive-top">
+        <button type="button" class="task-archive-back" @click="closeArchive">← Назад</button>
+        <div class="task-archive-title">Архив</div>
+      </div>
+
+      <div v-if="!state.archive && location === 'Today'" class="task-filters">
+        <button v-for="filter in filters" :key="filter.value" type="button" class="task-filter" :class="{ active: state.filter === filter.value }" @click="state.filter = filter.value"><span v-if="filter.dot" class="task-filter-dot" :class="filter.dot" />{{ filter.label }}</button>
+      </div>
+
+      <div ref="scrollEl" class="scroll task-scroll">
+        <div v-if="state.archive" ref="groupsEl" class="task-groups archive-flat">
+          <div v-for="task in state.tasks" :key="task.id" class="task-row-wrap" :data-reveal-key="`task:${task.id}`" :class="{ revealed: revealedKey === `task:${task.id}`, 'context-active': revealedKey === `task:${task.id}` }">
+            <article class="task-row" :data-task-id="task.id" @contextmenu.prevent="rowContextMenu($event, `task:${task.id}`)" @pointerdown="rowPointerDown($event, `task:${task.id}`)" @pointermove="rowPointerMove" @pointerup="rowPointerUp" @pointercancel="rowPointerCancel">
+              <template v-if="renamingKey === `task:${task.id}`">
+                <input ref="renameInputEl" v-model="renamingValue" class="task-inline-input" maxlength="160" @keydown.enter.prevent="commitRename(true)" @keydown.esc.prevent="commitRename(false)" @blur="commitRename(true)" @click.stop />
+              </template>
+              <template v-else>
+                <button type="button" class="task-open" @click="onTaskOpenClick(task)">
+                  <span v-if="isToday(task)" class="task-status-dot" :class="workState(task.workStatus)" />
+                  <span class="task-copy"><span class="task-title">{{ task.title }}</span></span>
+                </button>
+                <button type="button" class="row-menu-trigger" :hidden="state.orderMode" :aria-label="`Действия с задачей «${task.title}»`" aria-haspopup="menu" @click.stop="triggerMenu(`task:${task.id}`)">⋯</button>
+                <button v-if="state.orderMode" type="button" class="handle" data-drag-kind="task" :data-drag-id="task.id" :aria-label="`Перетащить ${task.title}`"><span><i></i><i></i><i></i><i></i><i></i><i></i></span></button>
+              </template>
+            </article>
+          </div>
+        </div>
+        <div v-else ref="groupsEl" class="task-groups" @pointerdown="onGroupsPointerDown" @pointermove="onGroupsPointerMove" @pointerup="void finishDrag($event)" @pointercancel="onGroupsPointerCancel">
+          <section v-for="group in groups" :key="group.key" class="task-group">
+            <div class="task-section-wrap" :data-reveal-key="group.key" :class="{ revealed: revealedKey === group.key, 'context-active': revealedKey === group.key }">
+              <div class="task-section-row" :data-section-row-key="group.key" :data-drag-key="group.key" :data-section-project="group.kind === 'project' ? group.projectId : ''" @contextmenu.prevent="rowContextMenu($event, group.key)" @pointerdown="rowPointerDown($event, group.key)" @pointermove="rowPointerMove" @pointerup="rowPointerUp" @pointercancel="rowPointerCancel">
+                <template v-if="renamingKey === group.key">
+                  <input ref="renameInputEl" v-model="renamingValue" class="task-inline-input" maxlength="160" @keydown.enter.prevent="commitRename(true)" @keydown.esc.prevent="commitRename(false)" @blur="commitRename(true)" @click.stop />
+                </template>
+                <template v-else>
+                  <button type="button" class="chev" :class="{ open: isExpanded(group.key) }" @click="toggleSectionFor(group.key)">›</button>
+                  <button type="button" class="task-section-title" @click="toggleSectionFor(group.key)">
+                    <span v-if="group.kind === 'project'" class="task-project-diamond" aria-hidden="true" />
+                    <span class="task-section-label">{{ group.title }}</span>
+                  </button>
+                  <button type="button" class="row-menu-trigger" :hidden="state.orderMode" :aria-label="`Действия с разделом «${group.title}»`" aria-haspopup="menu" @click.stop="triggerMenu(group.key)">⋯</button>
+                  <button v-if="group.kind === 'plain' && state.orderMode" type="button" class="handle" data-drag-kind="section" :data-drag-id="group.section.id" :aria-label="`Перетащить раздел ${group.title}`"><span><i></i><i></i><i></i><i></i><i></i><i></i></span></button>
+                </template>
+              </div>
+            </div>
+            <div v-if="isExpanded(group.key)" class="task-list">
+              <div v-for="task in group.tasks" :key="task.id" class="task-row-wrap" :data-reveal-key="`task:${task.id}`" :class="{ revealed: revealedKey === `task:${task.id}`, 'context-active': revealedKey === `task:${task.id}` }">
+                <article class="task-row" :data-task-id="task.id" @contextmenu.prevent="rowContextMenu($event, `task:${task.id}`)" @pointerdown="rowPointerDown($event, `task:${task.id}`)" @pointermove="rowPointerMove" @pointerup="rowPointerUp" @pointercancel="rowPointerCancel">
+                  <template v-if="renamingKey === `task:${task.id}`">
+                    <input ref="renameInputEl" v-model="renamingValue" class="task-inline-input" maxlength="160" @keydown.enter.prevent="commitRename(true)" @keydown.esc.prevent="commitRename(false)" @blur="commitRename(true)" @click.stop />
+                  </template>
+                  <template v-else>
+                    <button type="button" class="task-open" @click="onTaskOpenClick(task)">
+                      <span v-if="isToday(task)" class="task-status-dot" :class="workState(task.workStatus)" />
+                      <span class="task-copy"><span class="task-title">{{ task.title }}</span></span>
+                    </button>
+                    <button type="button" class="row-menu-trigger" :hidden="state.orderMode" :aria-label="`Действия с задачей «${task.title}»`" aria-haspopup="menu" @click.stop="triggerMenu(`task:${task.id}`)">⋯</button>
+                    <button v-if="state.orderMode" type="button" class="handle" data-drag-kind="task" :data-drag-id="task.id" :aria-label="`Перетащить ${task.title}`"><span><i></i><i></i><i></i><i></i><i></i><i></i></span></button>
+                  </template>
+                </article>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div v-if="showEmpty" class="task-empty">{{ emptyText }}</div>
+      </div>
+
+      <div v-show="location === 'Today' && !state.archive" class="task-archive-bar">
+        <button type="button" class="task-archive-link" @click="openArchive">Архив</button>
+      </div>
     </div>
+
+    <div class="overlay" :class="{ open: state.creating }" @click="closeCreateSheet" />
+    <section class="sheet task-create-sheet" :class="{ open: state.creating }" aria-label="Создание задачи">
+      <div class="sheet-head">
+        <div class="sheet-title">{{ state.createType === 'task' ? 'Новая задача' : 'Новый раздел' }}</div>
+        <button type="button" class="sheet-close" aria-label="Закрыть" @click="closeCreateSheet">×</button>
+      </div>
+      <div class="type-switch">
+        <button type="button" class="type-btn" :class="{ active: state.createType === 'task' }" @click="state.createType = 'task'; state.createListOpen = false">Задача</button>
+        <button type="button" class="type-btn" :class="{ active: state.createType === 'section' }" @click="state.createType = 'section'; state.createListOpen = false">Раздел</button>
+      </div>
+      <input ref="nameFieldEl" v-model="state.title" class="name-field" :placeholder="state.createType === 'task' ? 'Название задачи' : 'Название раздела'" maxlength="160" />
+      <textarea v-if="state.createType === 'task'" v-model="state.description" class="task-create-description" rows="3" placeholder="Описание задачи"></textarea>
+      <button v-if="state.createType === 'task'" type="button" class="where" @click="state.createListOpen = !state.createListOpen">
+        <span class="where-value">{{ state.sections.find(s => s.id === state.sectionId)?.name || 'Личное' }}</span><span class="where-arrow">›</span>
+      </button>
+      <div v-if="state.createType === 'task'" class="parent-list" :class="{ open: state.createListOpen }">
+        <button v-for="section in state.sections" :key="section.id" type="button" class="parent-option" :class="{ selected: state.sectionId === section.id }" @click="state.sectionId = section.id; state.createListOpen = false">{{ section.name }}</button>
+      </div>
+      <button type="button" class="create-submit" @click="submitCreate">{{ state.createType === 'task' ? 'Создать' : 'Создать раздел' }}</button>
+    </section>
+
+    <div v-if="menu.open" ref="menuEl" class="row-context-menu" role="menu" style="position: fixed" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" :aria-label="`Действия с ${menu.kind === 'task' ? 'задачей' : 'разделом'}`">
+      <button v-for="(item, index) in menu.items" :key="index" type="button" class="row-context-item" :class="{ danger: item.danger }" role="menuitem" @click="item.action(); closeMenu()">{{ item.label }}</button>
+    </div>
+
+    <div v-if="confirmBox.open" class="app-confirm-layer" @click.self="closeConfirm">
+      <div class="app-confirm-card" role="dialog" aria-modal="true" aria-labelledby="task-confirm-title">
+        <div class="app-confirm-title" id="task-confirm-title">{{ confirmBox.title }}</div>
+        <div v-if="confirmBox.body" class="app-confirm-body">{{ confirmBox.body }}</div>
+        <div class="app-confirm-actions">
+          <button ref="confirmCancelEl" type="button" class="app-confirm-cancel" @click="closeConfirm">Отмена</button>
+          <button type="button" class="app-confirm-accept" @click="runConfirm">{{ confirmBox.confirmLabel }}</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="task-toast" :class="{ show: toast.show }" role="status" aria-live="polite">{{ toast.text }}</div>
   </section>
 </template>
