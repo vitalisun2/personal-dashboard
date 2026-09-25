@@ -22,6 +22,8 @@ public sealed class OllamaChatModelProvider(IHttpClientFactory clients, IConfigu
                 model,
                 messages = request.Messages.Select(ToOllamaMessage),
                 tools = request.Tools.Select(ToOllamaTool).ToArray(),
+                options = new { num_ctx = 16384 },
+                keep_alive = "10m",
                 stream = false
             }, JsonOptions, cancellationToken);
         response.EnsureSuccessStatusCode();

@@ -192,9 +192,12 @@ public sealed class AgentTurnService(
             var completion = lastRoute.Completion;
             if (completion.ToolCalls.Count == 0)
                 {
-                    if (round < 2 && NeedsToolReminder(request.Prompt))
+                    if (round <= 3 && NeedsToolReminder(request.Prompt))
                     {
-                        messages.Add(new ModelMessage("user", "(Instruction) This request concerns your user's data or a change to it. You MUST call a tool before answering: search_app for any question about data, propose_changes for any create/edit/move/status/delete. Do not answer without a tool result."));
+                        var hadTools = allSources.Count > 0;
+                        messages.Add(new ModelMessage("user", hadTools
+                            ? "(Instruction) The search results above are your only source. Answer now in the user's language, quoting the returned titles. If the user asked to create or edit anything, call propose_changes now."
+                            : "(Instruction) This request concerns your user's data or a change to it. You MUST call a tool before answering: search_app for any question about data, propose_changes for any create/edit/delete. Do not answer without a tool result."));
                         continue;
                     }
                     return new AgentTurnResult(GroundLookupAnswer(request.Prompt, completion.Content ?? string.Empty, allSources), resolvedScope, lastRoute.RequestedModel,
