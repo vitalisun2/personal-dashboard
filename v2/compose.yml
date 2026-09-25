@@ -1,0 +1,47 @@
+name: personal-os-v2
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8090:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__PersonalOsV2: "Host=db;Port=5432;Database=personal_os_v2;Username=personal_os_v2;Password=${V2_DB_PASSWORD:?Set V2_DB_PASSWORD in a V2-only environment file}"
+      OLLAMA_URL: "${V2_OLLAMA_URL:-http://host.docker.internal:11434}"
+      OLLAMA_CHAT_MODEL: "${V2_GEMMA_MODEL:-gemma4:e4b-it-qat}"
+      OPENROUTER_URL: "${V2_OPENROUTER_URL:-https://openrouter.ai/api/v1}"
+      OPENROUTER_MODEL: "${V2_DEEPSEEK_MODEL:-deepseek/deepseek-v4-flash-0731}"
+      OPENROUTER_API_KEY_FILE: /run/secrets/openrouter-api-key
+    secrets:
+      - openrouter-api-key
+
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: personal_os_v2
+      POSTGRES_USER: personal_os_v2
+      POSTGRES_PASSWORD: "${V2_DB_PASSWORD:?Set V2_DB_PASSWORD in a V2-only environment file}"
+    volumes:
+      - personal_os_v2_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U personal_os_v2 -d personal_os_v2"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  personal_os_v2_postgres:
+
+secrets:
+  openrouter-api-key:
+    file: ${V2_OPENROUTER_API_KEY_FILE:?Set V2_OPENROUTER_API_KEY_FILE to an external key file}
