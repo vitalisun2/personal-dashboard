@@ -634,7 +634,7 @@ const KnowledgeTreeNodes = defineComponent({
       if (!id) return
       await vueNextTick()
       const row = document.querySelector<HTMLElement>(`.node[data-id="${id}"]`)
-      const menu = row?.querySelector<HTMLElement>('.row-context-menu')
+            const menu = document.querySelector<HTMLElement>('.knowledge-tree-nodes .row-context-menu')
       if (!row || !menu) return
       const rowRect = row.getBoundingClientRect()
       const width = menu.offsetWidth
@@ -700,30 +700,35 @@ const KnowledgeTreeNodes = defineComponent({
         }
       }
       if (props.menuId === node.id && !props.orderMode && props.renameId !== node.id) {
-        rowChildren.push(h('div', { class: 'row-context-menu', role: 'menu', 'aria-label': `Действия с ${node.title}` }, [
-          h('button', { class: 'row-context-item', type: 'button', role: 'menuitem', onClick: () => emit('rename', node) }, 'Переименовать'),
-          h('button', { class: ['row-context-item', 'danger'], type: 'button', role: 'menuitem', onClick: () => emit('delete', node) }, node.kind === 'section' ? 'Удалить раздел' : 'Удалить документ'),
-        ]))
-      }
-      return [
-        h('div', {
-          class: ['row-wrap', { 'context-active': props.menuId === node.id }],
-          onPointerdown: (event: PointerEvent) => pointerDown(node, event),
-          onContextmenu: (event: MouseEvent) => {
-            event.preventDefault()
-            if (!props.orderMode && props.menuId !== node.id) emit('menu', node.id)
-          },
-        }, [
-          h('div', { class: ['node', node.kind === 'section' ? 'section' : 'document'], 'data-id': node.id, style: { paddingLeft: `${depth * 17}px` } }, rowChildren),
-        ]),
-        ...(node.kind === 'section' && props.expanded.has(node.id)
-          ? draw(props.allNodes.filter(child => child.parentId === node.id).sort((a, b) => a.position - b.position), depth + 1)
-          : []),
-      ]
-    })
-    return () => draw(props.nodes)
-  },
-})
+              // меню отрисовывается на уровне дерева (см. return ниже) — не внутри строки
+            }
+            return [
+              h('div', {
+                class: ['row-wrap', { 'context-active': props.menuId === node.id }],
+                onPointerdown: (event: PointerEvent) => pointerDown(node, event),
+                onContextmenu: (event: MouseEvent) => {
+                  event.preventDefault()
+                  if (!props.orderMode && props.menuId !== node.id) emit('menu', node.id)
+                },
+              }, [
+                h('div', { class: ['node', node.kind === 'section' ? 'section' : 'document'], 'data-id': node.id, style: { paddingLeft: `${depth * 17}px` } }, rowChildren),
+              ]),
+              ...(node.kind === 'section' && props.expanded.has(node.id)
+                ? draw(props.allNodes.filter(child => child.parentId === node.id).sort((a, b) => a.position - b.position), depth + 1)
+                : []),
+            ]
+          })
+          const menuRoot = () => {
+                      const active = props.allNodes.find(node => node.id === props.menuId)
+                      if (!active || props.orderMode || props.renameId === active.id) return []
+                      return [h('div', { class: 'row-context-menu', role: 'menu', 'aria-label': `Действия с ${active.title}` }, [
+              h('button', { class: 'row-context-item', type: 'button', role: 'menuitem', onClick: () => emit('rename', active) }, 'Переименовать'),
+              h('button', { class: ['row-context-item', 'danger'], type: 'button', role: 'menuitem', onClick: () => emit('delete', active) }, active.kind === 'section' ? 'Удалить раздел' : 'Удалить документ'),
+            ])]
+          }
+          return () => h('div', { class: 'knowledge-tree-nodes' }, [...draw(props.nodes), ...menuRoot()])
+        },
+      })
 
 export default { components: { KnowledgeTreeNodes } }
 </script>
