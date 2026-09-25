@@ -13,3 +13,10 @@ public interface ITaskPlanningLinkUsage
 {
     Task<bool> IsInUseAsync(PlanningLink link, CancellationToken cancellationToken = default);
 }
+
+// Called after a Planning ancestor changes so Tasks can refresh the derived
+// search paths of its own linked task records without Planning editing them.
+public interface ITaskPlanningProjectionRefresh
+{
+    Task RefreshAsync(PlanningLink changedAncestor, CancellationToken cancellationToken = default);
+}
