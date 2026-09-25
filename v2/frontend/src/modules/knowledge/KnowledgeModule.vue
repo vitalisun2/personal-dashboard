@@ -2,7 +2,6 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { requestSync, subscribeSyncStatus, type SyncStatus } from '../../offline/runtime'
-import { chatRoute } from '../../shared/chatRoute'
 import {
   cacheServerKnowledge, getCachedKnowledge, getKnowledgeConflicts, loadKnowledgeTree,
   pendingKnowledgeCount, queueKnowledgeDelete, queueKnowledgeUpsert, searchKnowledge,
@@ -26,17 +25,19 @@ const isOnline = ref(typeof navigator === 'undefined' || navigator.onLine)
 const syncStatus = ref<SyncStatus>('ready')
 const conflictItems = ref<Awaited<ReturnType<typeof getKnowledgeConflicts>>>([])
 const menuId = ref('')
+const renameId = ref('')
 const createOpen = ref(false)
 const createKind = ref<'section' | 'document'>('document')
 const createTitle = ref('')
 const createParent = ref('')
+const parentListOpen = ref(false)
 const deleteTarget = ref<KnowledgeNode | null>(null)
-const renameTarget = ref<KnowledgeNode | null>(null)
-const renameValue = ref('')
 const titleEditing = ref(false)
 const markdownEditing = ref(false)
 const titleInput = ref<HTMLInputElement | null>(null)
 const markdownInput = ref<HTMLTextAreaElement | null>(null)
+const nameField = ref<HTMLInputElement | null>(null)
+const searchInput = ref<HTMLInputElement | null>(null)
 
 const tree = computed(() => {
   const children = (parentId: string | null): KnowledgeNode[] => nodes.value
@@ -44,7 +45,18 @@ const tree = computed(() => {
     .sort((a, b) => a.position - b.position)
   return children(null)
 })
-const sections = computed(() => nodes.value.filter(node => node.kind === 'section').sort((a, b) => a.path.localeCompare(b.path)))
+const sectionsWithDepth = computed(() => {
+  const out: { node: KnowledgeNode; depth: number }[] = []
+  const walk = (parentId: string | null, depth: number) => {
+    for (const node of childNodes(parentId)) {
+      if (node.kind !== 'section') continue
+      out.push({ node, depth })
+      walk(node.id, depth + 1)
+    }
+  }
+  walk(null, 0)
+  return out
+})
 const documentId = computed(() => {
   const match = route.params.pathMatch
   return Array.isArray(match) ? String(match.at(-1) || '') : String(match || '')
@@ -62,8 +74,23 @@ const searchGroups = computed(() => {
   const longQuery = term.split(/\s+/).length >= 4 || term.length > 28
   return (longQuery ? groups.reverse() : groups).filter(group => group.hits.length > 0)
 })
+const collapseLabel = computed(() => {
+  const ids = sectionsWithDepth.value.map(item => item.node.id)
+  const allOpen = ids.length > 0 && ids.every(id => expanded.value.has(id))
+  return allOpen ? 'Свернуть все разделы' : 'Развернуть все разделы'
+})
+const collapseIcon = computed(() => {
+  const inward = collapseLabel.value === 'Свернуть все разделы'
+  return {
+    upper: inward ? 'M5 3 10 8 15 3' : 'M5 8 10 3 15 8',
+    lower: inward ? 'M5 17 10 12 15 17' : 'M5 12 10 17 15 12',
+  }
+})
+const createWhereLabel = computed(() => {
+  if (!createParent.value) return 'Верхний уровень'
+  return sectionsWithDepth.value.find(item => item.node.id === createParent.value)?.node.title || 'Верхний уровень'
+})
 
-function childrenOf(parentId: string) { return nodes.value.filter(node => node.parentId === parentId).sort((a, b) => a.position - b.position) }
 function childNodes(parentId: string | null): KnowledgeNode[] { return nodes.value.filter(node => node.parentId === parentId).sort((a, b) => a.position - b.position) }
 function setError(err: unknown) { error.value = err instanceof Error ? err.message : 'Не удалось выполнить действие' }
 function nodePath(node: KnowledgeNode, all = nodes.value): string {
@@ -155,6 +182,11 @@ watch(query, value => {
   void runSearch()
 })
 watch(documentId, id => { if (id && !nodes.value.some(node => node.id === id)) void load() })
+watch(documentId, () => { titleEditing.value = false; markdownEditing.value = false })
+watch(createOpen, open => {
+  if (!open) parentListOpen.value = false
+  else void nextTick(() => nameField.value?.focus({ preventScroll: true }))
+})
 let unsubscribeSync: () => void = () => undefined
 const onOnline = () => { isOnline.value = true }
 const onOffline = () => { isOnline.value = false }
@@ -177,16 +209,27 @@ function toggle(id: string) {
   expanded.value = next
 }
 function toggleAll() {
-  const all = sections.value.every(node => expanded.value.has(node.id))
-  expanded.value = all ? new Set() : new Set(sections.value.map(node => node.id))
+  const ids = sectionsWithDepth.value.map(item => item.node.id)
+  const allOpen = ids.length > 0 && ids.every(id => expanded.value.has(id))
+  const next = new Set(expanded.value)
+  if (allOpen) ids.forEach(id => next.delete(id))
+  else ids.forEach(id => next.add(id))
+  expanded.value = next
 }
 function openDocument(id: string) {
   menuId.value = ''
   void router.push({ path: `/knowledge/${id}`, query: route.query })
 }
 function backToTree() { void router.push({ path: '/knowledge', query: route.query }) }
-function openCreate(parentId = '') {
-  createKind.value = 'document'; createParent.value = parentId; createTitle.value = ''; createOpen.value = true
+function openCreate() {
+  menuId.value = ''
+  createKind.value = 'document'; createParent.value = ''; createTitle.value = ''; parentListOpen.value = false
+  createOpen.value = true
+}
+function closeCreate() { createOpen.value = false; parentListOpen.value = false }
+function selectParent(id: string) {
+  createParent.value = id
+  parentListOpen.value = false
 }
 async function createNode() {
   if (!createTitle.value.trim()) return
@@ -223,17 +266,19 @@ async function saveMarkdown(event: FocusEvent) {
   await saveNode(document.value, document.value.title, input.value)
   markdownEditing.value = false
 }
+function cancelTitleEdit() { titleEditing.value = false }
+function cancelMarkdownEdit() { markdownEditing.value = false }
 async function editTitle() { markdownEditing.value = false; titleEditing.value = true; await nextTick(); titleInput.value?.focus(); titleInput.value?.select() }
 async function editMarkdown() { titleEditing.value = false; markdownEditing.value = true; await nextTick(); markdownInput.value?.focus() }
-async function renameFromMenu(node: KnowledgeNode) {
-  renameTarget.value = node
-  renameValue.value = node.title
+function renameFromMenu(node: KnowledgeNode) {
+  renameId.value = node.id
   menuId.value = ''
 }
-async function confirmRename() {
-  if (renameTarget.value && renameValue.value.trim()) await saveNode(renameTarget.value, renameValue.value)
-  renameTarget.value = null
+async function saveRename(node: KnowledgeNode, title: string) {
+  renameId.value = ''
+  if (title && title !== node.title) await saveNode(node, title)
 }
+function cancelRename() { renameId.value = '' }
 async function confirmDelete() {
   if (!deleteTarget.value) return
   busy.value = true
@@ -286,19 +331,37 @@ async function reorderNode(node: KnowledgeNode, targetId: string, placement: 'be
     if (placement === 'inside') expanded.value = new Set(expanded.value).add(parentId!)
   } catch (err) { setError(err) } finally { busy.value = false }
 }
-function focusChat() {
-  const node = document.value
-  void router.push(chatRoute(node ? { entityType: 'knowledge.document', entityId: node.id, entityVersion: node.version } : undefined))
+function clearSearch() {
+  query.value = ''
+  searchInput.value?.focus({ preventScroll: true })
 }
-watch(documentId, () => { titleEditing.value = false; markdownEditing.value = false })
+
+const STOP_WORDS = new Set(['где', 'что', 'как', 'мы', 'про', 'это', 'там', 'под', 'для', 'вот', 'когда', 'найди', 'поиск', 'делали', 'было'])
+function queryWords(q: string): string[] {
+  return q.toLocaleLowerCase().replace(/[.,!?;:()]/g, ' ').split(/\s+/).filter(Boolean)
+}
+function escapeHtml(value: string): string {
+  return String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || char)
+}
+function regexEscape(value: string): string {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+function highlight(text: string, rawQuery: string): string {
+  let out = escapeHtml(text)
+  for (const word of queryWords(rawQuery)) {
+    if (word.length >= 3 && !STOP_WORDS.has(word)) {
+      out = out.replace(new RegExp(`(${regexEscape(word)})`, 'ig'), '<mark class="exact">$1</mark>')
+    }
+  }
+  return out
+}
+function resultPath(hit: SearchHit): string {
+  return hit.source.path.split(' / ').slice(0, -1).join(' › ')
+}
 </script>
 
 <template>
-  <section class="knowledge-module" aria-labelledby="knowledge-heading">
-    <header class="knowledge-header">
-      <div><p class="eyebrow">Personal OS</p><h1 id="knowledge-heading">{{ document ? 'База знаний' : 'База знаний' }}</h1></div>
-      <button class="knowledge-chat" type="button" aria-label="Открыть чат с документом" @click="focusChat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17.2 4 20v-4.9A7.4 7.4 0 0 1 3 11.4C3 7.3 6.8 4 11.5 4S20 7.3 20 11.4s-3.8 7.4-8.5 7.4c-1.6 0-3.1-.4-4.3-1.1Z"/><path d="m16.9 2.7.45 1.15 1.15.45-1.15.45-.45 1.15-.45-1.15-1.15-.45 1.15-.45.45-1.15Z"/></svg></button>
-    </header>
+  <section id="knowledgeFX" class="knowledge-section" aria-label="База знаний">
     <div class="knowledge-sync" role="status">
       <span>{{ syncStatus === 'offline' || !isOnline ? 'Офлайн: локальная копия' : syncStatus === 'syncing' ? 'Синхронизация…' : syncStatus === 'error' ? 'Ошибка синхронизации' : conflicts ? 'Нужна проверка конфликта' : pendingCount ? 'Ожидает синхронизации' : 'Синхронизировано' }}</span>
       <span v-if="pendingCount">{{ pendingCount }} в очереди</span>
@@ -311,54 +374,97 @@ watch(documentId, () => { titleEditing.value = false; markdownEditing.value = fa
       <ul><li v-for="conflict in conflictItems" :key="conflict.operationId">{{ (conflict.localPayload as KnowledgeNode | null)?.title || conflict.id }} — {{ conflict.conflictReason || 'Версия на сервере изменилась' }}</li></ul>
     </section>
 
-    <template v-if="document">
-      <div class="knowledge-detail-top"><button type="button" class="knowledge-back" @click="backToTree">← Назад</button></div>
-      <article class="knowledge-document">
-        <h2 v-if="!titleEditing" class="knowledge-title-read" @click="editTitle">{{ document.title }}</h2>
-        <input v-else ref="titleInput" class="knowledge-title-input" :value="document.title" aria-label="Название документа" @blur="saveDocumentTitle" @keydown.enter="($event.target as HTMLInputElement).blur()" @keydown.esc="($event.target as HTMLInputElement).blur()">
-        <div v-if="!markdownEditing" class="knowledge-markdown-read" @click="editMarkdown">{{ document.markdown || 'Новый документ. Содержимое пока пустое.' }}</div>
-        <textarea v-else ref="markdownInput" class="knowledge-markdown" :value="document.markdown" placeholder="Новый документ. Содержимое пока пустое." aria-label="Содержимое документа" @blur="saveMarkdown" @keydown.esc="($event.target as HTMLTextAreaElement).blur()" />
-        <button class="knowledge-delete" type="button" @click="deleteTarget = document">Удалить документ</button>
-      </article>
-    </template>
+    <div v-if="document" id="docFX" class="scroll">
+      <div class="doc-detail-top">
+        <button type="button" class="doc-action doc-back doc-detail-back" @click="backToTree">← Назад</button>
+      </div>
+      <div class="doc-title-wrap">
+        <button v-if="!titleEditing" type="button" class="doc-open-title" @click="editTitle">{{ document.title }}</button>
+        <input v-else ref="titleInput" class="doc-title-input" type="text" :value="document.title" aria-label="Название документа" @blur="saveDocumentTitle" @keydown.enter="($event.target as HTMLInputElement).blur()" @keydown.esc="cancelTitleEdit">
+      </div>
+      <div class="doc-content-card">
+        <div v-if="!markdownEditing" class="doc-open-content" @click="editMarkdown">{{ document.markdown || 'Новый документ. Содержимое пока пустое.' }}</div>
+        <textarea v-else ref="markdownInput" class="doc-content-input" :value="document.markdown" placeholder="Новый документ. Содержимое пока пустое." aria-label="Содержимое документа" @blur="saveMarkdown" @keydown.esc="cancelMarkdownEdit" />
+      </div>
+      <div class="doc-detail-bottom-actions">
+        <button type="button" class="doc-delete-icon" aria-label="Удалить документ" title="Удалить документ" @click="deleteTarget = document"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m6 7 1 13h10l1-13"/><path d="M10 11v5M14 11v5"/></svg></button>
+      </div>
+    </div>
+
     <template v-else>
-      <div class="knowledge-toolbar" :class="{ 'search-expanded': isSearching }">
-        <label class="knowledge-search"><span aria-hidden="true">⌕</span><input v-model="query" type="search" placeholder="Поиск в базе знаний…" aria-label="Поиск в базе знаний"><button v-if="query" type="button" aria-label="Очистить поиск" @click="query = ''">×</button></label>
-        <button type="button" class="knowledge-icon-button collapse-toggle" :aria-label="sections.length && sections.every(node => expanded.has(node.id)) ? 'Свернуть все разделы' : 'Развернуть все разделы'" @click="toggleAll"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5M7 15l5-5 5 5"/></svg></button>
-        <button type="button" class="knowledge-icon-button order-mode-toggle" :disabled="isSearching" :aria-pressed="orderMode" :aria-label="orderMode ? 'Выключить сортировку' : 'Включить сортировку'" :title="orderMode ? 'Выключить сортировку' : 'Включить сортировку'" @click="orderMode = !orderMode"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M4 12h11M4 17h11M19 6v12m-2.5-2.5L19 18l2.5-2.5"/></svg></button>
-        <button type="button" class="knowledge-add" aria-label="Создать документ или раздел" @click="openCreate()">＋</button>
+      <div class="toolbar" :class="{ 'search-expanded': isSearching }">
+        <label class="search">
+          <span aria-hidden="true">⌕</span>
+          <input ref="searchInput" v-model="query" type="text" autocomplete="off" placeholder="Поиск в базе знаний…" aria-label="Поиск в базе знаний">
+          <button type="button" class="clear" :class="{ show: isSearching }" aria-label="Очистить поиск" @click="clearSearch">×</button>
+        </label>
+        <button type="button" class="collapse-toggle" :aria-label="collapseLabel" :title="collapseLabel" @click="toggleAll"><svg viewBox="0 0 20 20" aria-hidden="true"><path :d="collapseIcon.upper"/><path :d="collapseIcon.lower"/></svg></button>
+        <button type="button" class="order-mode-toggle" :disabled="isSearching" :aria-pressed="orderMode" :aria-label="orderMode ? 'Выключить сортировку' : 'Включить сортировку'" :title="orderMode ? 'Выключить сортировку' : 'Включить сортировку'" @click="orderMode = !orderMode"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M4 12h11M4 17h11M19 6v12m-2.5-2.5L19 18l2.5-2.5"/></svg></button>
+        <button type="button" class="plus" aria-label="Создать документ или раздел" @click="openCreate()">＋</button>
       </div>
-      <div v-if="isSearching" class="knowledge-results">
-        <p v-if="localResultIds.size" class="knowledge-local-search">{{ isOnline ? 'Дополнительные локальные результаты по сохранённым документам.' : 'Локальные результаты: поиск выполнен по сохранённым документам.' }}</p>
-        <section v-for="group in searchGroups" :key="group.kind" class="knowledge-result-group" :class="`is-${group.kind}`">
-          <div class="knowledge-group-head"><span class="knowledge-group-name"><span class="knowledge-group-kind">{{ group.symbol }}</span>{{ group.title }}</span><span>{{ group.hits.length }}</span></div>
-          <button v-for="hit in group.hits" :key="hit.source.id" type="button" class="knowledge-result" :class="{ 'is-local-result': localResultIds.has(hit.source.id) }" @click="openDocument(hit.source.id)">
-            <strong>{{ hit.source.title }}</strong><small>{{ hit.source.path }}</small><span>{{ hit.source.snippet }}</span>
-          </button>
-        </section>
-        <p v-if="!results.length && isOnline" class="knowledge-empty">Ничего не найдено</p>
-        <p v-else-if="!results.length" class="knowledge-empty">Нет совпадений в сохранённых документах.</p>
-      </div>
-      <div v-else class="knowledge-tree">
-        <KnowledgeTreeNodes :nodes="tree" :all-nodes="nodes" :expanded="expanded" :order-mode="orderMode" :menu-id="menuId" @toggle="toggle" @open="openDocument" @menu="menuId = menuId === $event ? '' : $event" @create="openCreate" @rename="renameFromMenu" @delete="deleteTarget = $event" @reorder="reorderNode" />
-        <p v-if="!nodes.length" class="knowledge-empty">База знаний пока пуста. Создайте первый документ или раздел.</p>
+      <div class="scroll">
+        <div v-if="!isSearching" class="tree">
+          <KnowledgeTreeNodes
+            :nodes="tree" :all-nodes="nodes" :expanded="expanded"
+            :order-mode="orderMode" :menu-id="menuId" :rename-id="renameId"
+            @toggle="toggle"
+            @open="openDocument"
+            @menu="menuId = menuId === $event ? '' : $event"
+            @close="menuId = ''"
+            @rename="renameFromMenu"
+            @rename-save="saveRename"
+            @rename-cancel="cancelRename"
+            @delete="menuId = ''; deleteTarget = $event"
+            @reorder="reorderNode"
+          />
+          <p v-if="!nodes.length" class="empty">База знаний пока пуста. Создайте первый документ или раздел.</p>
+        </div>
+        <div v-else class="results">
+          <p v-if="localResultIds.size" class="knowledge-local-note">{{ isOnline ? 'Дополнительно найдено в локальной копии.' : 'Поиск выполнен по сохранённым документам (офлайн).' }}</p>
+          <section v-for="group in searchGroups" :key="group.kind" class="group" :class="group.kind === 'semantic' ? 'semantic' : 'exact'">
+            <div class="group-head"><span class="group-name"><span class="kind">{{ group.symbol }}</span>{{ group.title }}</span><span>{{ group.hits.length }}</span></div>
+            <button v-for="hit in group.hits" :key="hit.source.id" type="button" class="result" :class="{ 'is-local-result': localResultIds.has(hit.source.id) }" @click="openDocument(hit.source.id)">
+              <div class="result-title" v-html="group.kind === 'lexical' ? highlight(hit.source.title, query) : escapeHtml(hit.source.title)"></div>
+              <div class="result-path">{{ resultPath(hit) }}</div>
+              <div class="result-snippet" v-html="group.kind === 'lexical' ? highlight(hit.source.snippet, query) : escapeHtml(hit.source.snippet)"></div>
+            </button>
+          </section>
+          <p v-if="!results.length" class="empty">Ничего не найдено</p>
+        </div>
       </div>
     </template>
 
-    <div v-if="createOpen" class="knowledge-overlay" @click.self="createOpen = false">
-      <form class="knowledge-sheet" @submit.prevent="createNode">
-        <div class="sheet-heading"><h2>{{ createKind === 'document' ? 'Новый документ' : 'Новый раздел' }}</h2><button type="button" aria-label="Закрыть" @click="createOpen = false">×</button></div>
-        <div class="knowledge-kind"><button type="button" :class="{ active: createKind === 'document' }" @click="createKind = 'document'">Документ</button><button type="button" :class="{ active: createKind === 'section' }" @click="createKind = 'section'">Раздел</button></div>
-        <label class="sheet-label">Где создать<select v-model="createParent"><option value="">Верхний уровень</option><option v-for="node in sections" :key="node.id" :value="node.id">{{ node.path }}</option></select></label>
-        <label class="sheet-label">Название<input v-model="createTitle" autofocus maxlength="300" :placeholder="createKind === 'document' ? 'Название документа' : 'Название раздела'"></label>
-        <button class="knowledge-submit" type="submit" :disabled="busy || !createTitle.trim()">Создать</button>
-      </form>
-    </div>
-    <div v-if="deleteTarget" class="knowledge-overlay" @click.self="deleteTarget = null">
-      <section class="knowledge-confirm" role="alertdialog" aria-modal="true" aria-labelledby="delete-title"><h2 id="delete-title">Удалить «{{ deleteTarget.title }}»?</h2><p>Элемент и его содержимое будут удалены из базы знаний.</p><div><button type="button" @click="deleteTarget = null">Отмена</button><button type="button" class="danger" :disabled="busy" @click="confirmDelete">Удалить</button></div></section>
-    </div>
-    <div v-if="renameTarget" class="knowledge-overlay" @click.self="renameTarget = null">
-      <form class="knowledge-sheet" @submit.prevent="confirmRename"><div class="sheet-heading"><h2>Переименовать</h2><button type="button" aria-label="Закрыть" @click="renameTarget = null">×</button></div><label class="sheet-label">Название<input v-model="renameValue" autofocus maxlength="300"></label><button class="knowledge-submit" type="submit" :disabled="!renameValue.trim()">Сохранить</button></form>
+    <div class="overlay" :class="{ open: createOpen }" @click.self="closeCreate"></div>
+    <section class="sheet" :class="{ open: createOpen }" aria-label="Создание документа или раздела">
+      <div class="sheet-head">
+        <div class="sheet-title">{{ createKind === 'document' ? 'Новый документ' : 'Новый раздел' }}</div>
+        <button type="button" class="sheet-close" aria-label="Закрыть" @click="closeCreate">×</button>
+      </div>
+      <div class="type-switch">
+        <button type="button" class="type-btn" :class="{ active: createKind === 'document' }" @click="createKind = 'document'">Документ</button>
+        <button type="button" class="type-btn" :class="{ active: createKind === 'section' }" @click="createKind = 'section'">Раздел</button>
+      </div>
+      <input ref="nameField" v-model="createTitle" class="name-field" type="text" maxlength="300" :placeholder="createKind === 'document' ? 'Название документа' : 'Название раздела'">
+      <button type="button" class="where" @click="parentListOpen = !parentListOpen">
+        <span class="where-value">{{ createWhereLabel }}</span>
+        <span class="where-arrow">›</span>
+      </button>
+      <div class="parent-list" :class="{ open: parentListOpen }">
+        <button type="button" class="parent-option" :class="{ selected: !createParent }" @click="selectParent('')">Верхний уровень</button>
+        <button v-for="item in sectionsWithDepth" :key="item.node.id" type="button" class="parent-option" :class="{ selected: createParent === item.node.id }" :style="{ paddingLeft: `${9 + item.depth * 15}px` }" @click="selectParent(item.node.id)">{{ item.node.title }}</button>
+      </div>
+      <button type="button" class="create-submit" :disabled="busy || !createTitle.trim()" @click="createNode">Создать</button>
+    </section>
+
+    <div v-if="deleteTarget" class="app-confirm-layer" @click.self="deleteTarget = null">
+      <div class="app-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="kb-confirm-title">
+        <div class="app-confirm-title" id="kb-confirm-title">Удалить {{ deleteTarget.kind === 'section' ? 'раздел' : 'документ' }} «{{ deleteTarget.title }}»?</div>
+        <div class="app-confirm-body">{{ deleteTarget.kind === 'section' ? 'Все документы внутри раздела тоже будут удалены.' : 'Документ будет удалён из базы знаний.' }}</div>
+        <div class="app-confirm-actions">
+          <button type="button" class="app-confirm-cancel" @click="deleteTarget = null">Отмена</button>
+          <button type="button" class="app-confirm-accept" :disabled="busy" @click="confirmDelete">Удалить</button>
+        </div>
+      </div>
     </div>
   </section>
 </template>
@@ -375,77 +481,85 @@ const KnowledgeTreeNodes = defineComponent({
     expanded: { type: Object as PropType<Set<string>>, required: true },
     orderMode: Boolean,
     menuId: String,
+    renameId: String,
   },
-  emits: ['toggle', 'open', 'menu', 'create', 'rename', 'delete', 'reorder'],
+  emits: ['toggle', 'open', 'menu', 'close', 'rename', 'rename-save', 'rename-cancel', 'delete', 'reorder'],
   setup(props, { emit }) {
     type Gesture = { id: string; pointerId: number; x: number; y: number; held: boolean; moved: boolean; timer?: number }
     type Drag = { node: KNode; pointerId: number; x: number; y: number; row: HTMLElement; ghost: HTMLElement | null; targetId: string; placement: 'before' | 'after' | 'inside' | null; started: boolean }
     let gesture: Gesture | null = null
     let drag: Drag | null = null
     let suppressedClickUntil = 0
-    let ghost: HTMLElement | null = null
+    let ghostEl: HTMLElement | null = null
+
     const clearGesture = () => { if (gesture?.timer) window.clearTimeout(gesture.timer); gesture = null }
     const pointerDown = (node: KNode, event: PointerEvent) => {
-      if (props.orderMode || (event.target as HTMLElement).closest('.knowledge-menu-trigger,.knowledge-chevron,.knowledge-context-menu')) return
+      if (props.orderMode || (event.target as HTMLElement).closest('.handle,.row-menu-trigger,.rename-input')) return
       clearGesture()
       const current: Gesture = { id: node.id, pointerId: event.pointerId, x: event.clientX, y: event.clientY, held: false, moved: false }
       gesture = current
+      ;(event.target as HTMLElement).setPointerCapture?.(event.pointerId)
       if (event.pointerType === 'touch' || event.pointerType === 'pen') {
         current.timer = window.setTimeout(() => {
           if (gesture !== current || current.moved) return
           current.held = true
-          suppressedClickUntil = Date.now() + 700
+          suppressedClickUntil = Date.now() + 350
           emit('menu', node.id)
         }, 480)
       }
     }
     const pointerMove = (event: PointerEvent) => {
       if (drag?.pointerId === event.pointerId) {
-        if (!drag.started && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > 6) {
-          drag.started = true
-          drag.row.classList.add('knowledge-drag-source')
-          ghost = document.createElement('div')
-          ghost.className = 'knowledge-drag-ghost'
-          ghost.textContent = drag.node.title
+        const current = drag
+        if (!current.started && Math.hypot(event.clientX - current.x, event.clientY - current.y) > 6) {
+          current.started = true
+          current.row.classList.add('drag-source')
+          const ghost = document.createElement('div')
+          ghost.className = 'reorder-ghost'
+          ghost.textContent = current.node.title
+          const rect = current.row.getBoundingClientRect()
+          ghost.style.width = `${rect.width}px`
+          ghost.style.height = `${rect.height}px`
           document.body.append(ghost)
-          drag.ghost = ghost
+          ghostEl = ghost
+          current.ghost = ghost
         }
-        if (!drag.started || !ghost) return
+        if (!current.started || !ghostEl) return
         event.preventDefault()
-        ghost.style.left = `${event.clientX + 12}px`
-        ghost.style.top = `${event.clientY + 12}px`
-        document.querySelectorAll('.knowledge-drop-before,.knowledge-drop-after,.knowledge-drop-inside').forEach(row => row.classList.remove('knowledge-drop-before', 'knowledge-drop-after', 'knowledge-drop-inside'))
-        const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('.knowledge-row[data-id]')
-        drag.targetId = ''
-        drag.placement = null
+        ghostEl.style.left = `${event.clientX + 12}px`
+        ghostEl.style.top = `${event.clientY + 12}px`
+        dropClear()
+        const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('.node[data-id]')
+        current.targetId = ''
+        current.placement = null
         const candidate = hit?.dataset.id ? props.allNodes.find(node => node.id === hit.dataset.id) : undefined
-        if (!hit || !candidate || candidate.id === drag.node.id) return
+        if (!hit || !candidate || candidate.id === current.node.id) return
         const rect = hit.getBoundingClientRect()
         const ratio = (event.clientY - rect.top) / Math.max(rect.height, 1)
-        const placement = candidate.kind === 'section' && ratio >= .24 && ratio <= .76 ? 'inside' : ratio < .5 ? 'before' : 'after'
+        const placement = candidate.kind === 'section' && ratio >= .2 && ratio <= .8 ? 'inside' : ratio < .5 ? 'before' : 'after'
         const parentId = placement === 'inside' ? candidate.id : candidate.parentId
-        if (drag.node.kind === 'section' && parentId && (parentId === drag.node.id || isUnder(parentId, drag.node.id))) return
-        hit.classList.add(placement === 'inside' ? 'knowledge-drop-inside' : placement === 'before' ? 'knowledge-drop-before' : 'knowledge-drop-after')
-        drag.targetId = candidate.id
-        drag.placement = placement
+        if (current.node.kind === 'section' && parentId && (parentId === current.node.id || isUnder(parentId, current.node.id))) return
+        hit.classList.add(placement === 'inside' ? 'drop-inside' : placement === 'before' ? 'drop-before' : 'drop-after')
+        current.targetId = candidate.id
+        current.placement = placement
         return
       }
       if (!gesture || gesture.pointerId !== event.pointerId) return
       const dx = event.clientX - gesture.x
       const dy = event.clientY - gesture.y
-      if (Math.hypot(dx, dy) > 9) {
+      if (Math.hypot(dx, dy) > 8) {
         gesture.moved = true
-        if (gesture.timer) window.clearTimeout(gesture.timer)
-        gesture.timer = undefined
+        if (gesture.timer) { window.clearTimeout(gesture.timer); gesture.timer = undefined }
       }
+      if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) { gesture = null; return }
+      if (dx < -12 && Math.abs(dx) > Math.abs(dy) * 1.1) event.preventDefault()
     }
     const pointerUp = (event: PointerEvent) => {
       if (drag?.pointerId === event.pointerId) {
         const current = drag
-        current.row.classList.remove('knowledge-drag-source')
-        ghost?.remove(); ghost = null
-        document.querySelectorAll('.knowledge-drop-before,.knowledge-drop-after,.knowledge-drop-inside').forEach(row => row.classList.remove('knowledge-drop-before', 'knowledge-drop-after', 'knowledge-drop-inside'))
-        drag = null
+        current.row.classList.remove('drag-source')
+        ghostEl?.remove(); ghostEl = null; drag = null
+        dropClear()
         if (current.started) {
           suppressedClickUntil = Date.now() + 700
           if (current.targetId && current.placement) emit('reorder', current.node, current.targetId, current.placement)
@@ -457,12 +571,31 @@ const KnowledgeTreeNodes = defineComponent({
       const dx = event.clientX - current.x
       const dy = event.clientY - current.y
       gesture = null
-      if (!current.held && Math.hypot(dx, dy) > 38 && dx < -35 && Math.abs(dy) < 45) {
-        suppressedClickUntil = Date.now() + 700
+      if (current.held) return
+      if (Math.abs(dx) < Math.abs(dy) * 1.2) return
+      if (dx <= -56) {
+        suppressedClickUntil = Date.now() + 320
         emit('menu', current.id)
+      } else if (dx >= 45 && props.menuId === current.id) {
+        suppressedClickUntil = Date.now() + 320
+        emit('close')
       }
     }
-    const pointerCancel = () => { clearGesture(); if (drag) { drag.row.classList.remove('knowledge-drag-source'); ghost?.remove(); ghost = null; drag = null } }
+    const pointerCancel = () => {
+      clearGesture()
+      if (drag) { drag.row.classList.remove('drag-source'); ghostEl?.remove(); ghostEl = null; drag = null }
+    }
+    const dragStart = (node: KNode, event: PointerEvent) => {
+      if (!props.orderMode || event.button !== 0) return
+      event.preventDefault()
+      const row = (event.currentTarget as HTMLElement).closest<HTMLElement>('.node')
+      if (!row) return
+      ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+      drag = { node, pointerId: event.pointerId, x: event.clientX, y: event.clientY, row, ghost: null, targetId: '', placement: null, started: false }
+    }
+    const dropClear = () => {
+      document.querySelectorAll('.drop-before,.drop-after,.drop-inside').forEach(el => el.classList.remove('drop-before', 'drop-after', 'drop-inside'))
+    }
     const isUnder = (id: string, ancestorId: string): boolean => {
       let current = props.allNodes.find(node => node.id === id)
       while (current?.parentId) {
@@ -471,18 +604,37 @@ const KnowledgeTreeNodes = defineComponent({
       }
       return false
     }
-    const startDrag = (node: KNode, event: PointerEvent) => {
-      if (!props.orderMode || event.button !== 0) return
-      event.preventDefault()
-      const row = (event.currentTarget as HTMLElement).closest<HTMLElement>('.knowledge-row')
-      if (!row) return
-      ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
-      drag = { node, pointerId: event.pointerId, x: event.clientX, y: event.clientY, row, ghost: null, targetId: '', placement: null, started: false }
+    const closeMenu = () => { if (props.menuId) emit('close') }
+    const onDocumentPointerDown = (event: PointerEvent) => {
+      if (!props.menuId) return
+      const target = event.target as HTMLElement | Document
+      if (target instanceof Element && target.closest('.row-context-menu,.row-menu-trigger')) return
+      closeMenu()
     }
+    const onDocumentKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && props.menuId) { event.preventDefault(); closeMenu() }
+    }
+    const onDocumentScroll = (event: Event) => {
+      if (props.menuId && !(event.target as HTMLElement).closest('.row-context-menu')) closeMenu()
+    }
+    const suppressClick = (event: MouseEvent) => {
+      if (Date.now() < suppressedClickUntil && !(event.target as HTMLElement).closest('.row-context-menu,.app-confirm-layer')) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+    }
+    document.addEventListener('pointerdown', onDocumentPointerDown, true)
+    document.addEventListener('keydown', onDocumentKeyDown, true)
+    document.addEventListener('scroll', onDocumentScroll, true)
+    document.addEventListener('click', suppressClick, true)
     window.addEventListener('pointermove', pointerMove, { passive: false })
     window.addEventListener('pointerup', pointerUp)
     window.addEventListener('pointercancel', pointerCancel)
     onVueUnmounted(() => {
+      document.removeEventListener('pointerdown', onDocumentPointerDown, true)
+      document.removeEventListener('keydown', onDocumentKeyDown, true)
+      document.removeEventListener('scroll', onDocumentScroll, true)
+      document.removeEventListener('click', suppressClick, true)
       window.removeEventListener('pointermove', pointerMove)
       window.removeEventListener('pointerup', pointerUp)
       window.removeEventListener('pointercancel', pointerCancel)
@@ -491,32 +643,95 @@ const KnowledgeTreeNodes = defineComponent({
     vueWatch(() => props.menuId, async id => {
       if (!id) return
       await vueNextTick()
-      const row = document.querySelector<HTMLElement>(`.knowledge-row[data-id="${id}"]`)
-      const menu = row?.querySelector<HTMLElement>('.knowledge-context-menu')
+      const row = document.querySelector<HTMLElement>(`.node[data-id="${id}"]`)
+      const menu = row?.querySelector<HTMLElement>('.row-context-menu')
       if (!row || !menu) return
       const rowRect = row.getBoundingClientRect()
       const width = menu.offsetWidth
       const height = menu.offsetHeight
+      menu.style.position = 'fixed'
       menu.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rowRect.right - width))}px`
       menu.style.top = `${rowRect.bottom + height + 8 > window.innerHeight ? Math.max(8, rowRect.top - height - 5) : rowRect.bottom + 5}px`
+      void menu.offsetWidth
+      menu.classList.add('opening')
     })
-    const draw = (items: KNode[], depth = 0): VNode[] => items.flatMap((node, index) => {
-      const row = h('div', { class: ['knowledge-row', `is-${node.kind}`], 'data-id': node.id, style: { '--depth': depth }, onPointerdown: (event: PointerEvent) => pointerDown(node, event), onContextmenu: (event: MouseEvent) => { event.preventDefault(); if (!props.orderMode) emit('menu', node.id) } }, [
-        node.kind === 'section' ? h('button', { class: ['knowledge-chevron', { open: props.expanded.has(node.id) }], type: 'button', onClick: () => emit('toggle', node.id), 'aria-label': props.expanded.has(node.id) ? 'Свернуть раздел' : 'Раскрыть раздел' }, '›') : null,
-        h('button', { class: 'knowledge-node-name', type: 'button', onClick: () => { if (Date.now() < suppressedClickUntil || props.orderMode) return; node.kind === 'section' ? emit('toggle', node.id) : emit('open', node.id) } }, node.title),
-        props.orderMode ? h('button', { class: 'knowledge-drag-handle', type: 'button', 'aria-label': `Перетащить ${node.title}`, onPointerdown: (event: PointerEvent) => startDrag(node, event) }, '⠿') : h('button', { class: 'knowledge-menu-trigger', type: 'button', 'aria-label': `Действия: ${node.title}`, 'aria-expanded': props.menuId === node.id, onClick: () => emit('menu', node.id) }, '⋯'),
-        props.menuId === node.id && !props.orderMode ? h('div', { class: 'knowledge-context-menu', role: 'menu' }, [
-          h('button', { type: 'button', role: 'menuitem', onClick: () => emit('rename', node) }, 'Переименовать'),
-          node.kind === 'section' ? h('button', { type: 'button', role: 'menuitem', onClick: () => emit('create', node.id) }, 'Создать внутри') : null,
-          h('button', { type: 'button', role: 'menuitem', class: 'danger', onClick: () => emit('delete', node) }, 'Удалить'),
-        ]) : null,
-      ])
-      const nested = node.kind === 'section' && props.expanded.has(node.id)
-        ? draw(props.allNodes.filter(child => child.parentId === node.id).sort((a, b) => a.position - b.position), depth + 1)
-        : []
-      return [row, ...nested]
+    vueWatch(() => props.renameId, async id => {
+      if (!id) return
+      await vueNextTick()
+      const input = document.querySelector<HTMLInputElement>(`.rename-input[data-id="${id}"]`)
+      input?.focus()
+      input?.select()
     })
-    return () => h('div', { class: 'knowledge-tree-nodes' }, draw(props.nodes))
+    const nodeClick = (node: KNode) => {
+      if (Date.now() < suppressedClickUntil || props.orderMode) return
+      node.kind === 'section' ? emit('toggle', node.id) : emit('open', node.id)
+    }
+    const renameInputHandlers = (node: KNode) => {
+      let done = false
+      const finish = (event: FocusEvent | KeyboardEvent, save: boolean) => {
+        if (done) return
+        done = true
+        const input = event.target as HTMLInputElement
+        if (save) emit('rename-save', node, input.value.trim())
+        else emit('rename-cancel')
+      }
+      return {
+        onKeydown: (event: KeyboardEvent) => {
+          if (event.key === 'Enter') { event.preventDefault(); finish(event, true) }
+          else if (event.key === 'Escape') { event.preventDefault(); finish(event, false) }
+        },
+        onBlur: (event: FocusEvent) => finish(event, true),
+      }
+    }
+    const dots = () => h('span', Array.from({ length: 6 }, () => h('i')))
+    const draw = (items: KNode[], depth = 0): VNode[] => items.flatMap(node => {
+      const rowChildren: VNode[] = []
+      if (props.renameId === node.id) {
+        rowChildren.push(h('input', { class: 'rename-input', 'data-id': node.id, value: node.title, 'aria-label': 'Название', ...renameInputHandlers(node) }))
+      } else {
+        if (node.kind === 'section') {
+          rowChildren.push(h('button', { class: ['chev', { open: props.expanded.has(node.id) }], type: 'button', 'aria-label': props.expanded.has(node.id) ? 'Свернуть раздел' : 'Раскрыть раздел', onClick: () => { if (Date.now() < suppressedClickUntil || props.orderMode) return; emit('toggle', node.id) } }, '›'))
+          rowChildren.push(h('button', { class: 'section-name', type: 'button', onClick: () => nodeClick(node) }, node.title))
+        } else {
+          rowChildren.push(h('button', { class: 'doc-title', type: 'button', onClick: () => nodeClick(node) }, node.title))
+        }
+        rowChildren.push(h('button', {
+          class: 'row-menu-trigger',
+          type: 'button',
+          hidden: props.orderMode,
+          title: 'Действия',
+          'aria-label': `Действия с ${node.title}`,
+          'aria-haspopup': 'menu',
+          'aria-expanded': props.menuId === node.id,
+          onClick: (event: MouseEvent) => { event.stopPropagation(); emit('menu', node.id) },
+        }, '⋯'))
+        if (props.orderMode) {
+          rowChildren.push(h('button', { class: 'handle', type: 'button', 'data-drag': node.id, 'aria-label': `Перетащить ${node.title}`, onPointerdown: (event: PointerEvent) => dragStart(node, event) }, dots()))
+        }
+      }
+      if (props.menuId === node.id && !props.orderMode && props.renameId !== node.id) {
+        rowChildren.push(h('div', { class: 'row-context-menu', role: 'menu', 'aria-label': `Действия с ${node.title}` }, [
+          h('button', { class: 'row-context-item', type: 'button', role: 'menuitem', onClick: () => emit('rename', node) }, 'Переименовать'),
+          h('button', { class: ['row-context-item', 'danger'], type: 'button', role: 'menuitem', onClick: () => emit('delete', node) }, node.kind === 'section' ? 'Удалить раздел' : 'Удалить документ'),
+        ]))
+      }
+      return [
+        h('div', {
+          class: ['row-wrap', { 'context-active': props.menuId === node.id }],
+          onPointerdown: (event: PointerEvent) => pointerDown(node, event),
+          onContextmenu: (event: MouseEvent) => {
+            event.preventDefault()
+            if (!props.orderMode && props.menuId !== node.id) emit('menu', node.id)
+          },
+        }, [
+          h('div', { class: ['node', node.kind === 'section' ? 'section' : 'document'], 'data-id': node.id, style: { paddingLeft: `${depth * 17}px` } }, rowChildren),
+        ]),
+        ...(node.kind === 'section' && props.expanded.has(node.id)
+          ? draw(props.allNodes.filter(child => child.parentId === node.id).sort((a, b) => a.position - b.position), depth + 1)
+          : []),
+      ]
+    })
+    return () => draw(props.nodes)
   },
 })
 
