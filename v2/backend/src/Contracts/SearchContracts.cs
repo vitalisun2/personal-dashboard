@@ -8,6 +8,13 @@ public sealed record SearchChatContext(
     Guid? EntityId,
     long? EntityVersion);
 
+public sealed record SearchChatFilter(
+    Guid? ConversationId = null,
+    string? Mode = null,
+    string? EntityType = null,
+    Guid? EntityId = null,
+    long? EntityVersion = null);
+
 public sealed record SearchIndexSource(
     string Kind,
     Guid Id,
@@ -45,13 +52,23 @@ public sealed record SearchRequest(
     string Query,
     SearchCoverageMode Mode = SearchCoverageMode.Relevant,
     IReadOnlyList<string>? Kinds = null,
-    SearchChatContext? Context = null,
+    SearchChatFilter? Context = null,
     DateTimeOffset? UpdatedAfterUtc = null,
     DateTimeOffset? UpdatedBeforeUtc = null,
     string? Cursor = null,
     int? PageSize = null);
 
-public sealed record SearchSourceReference(string Kind, Guid Id, long Version, string? Url, string Snippet, bool IsChatHistory);
+public sealed record SearchSourceReference(
+    string Kind,
+    Guid Id,
+    long Version,
+    string? Url,
+    string Title,
+    string? Path,
+    string Snippet,
+    DateTimeOffset UpdatedAtUtc,
+    bool IsChatHistory,
+    SearchChatContext? ChatContext);
 
 public sealed record SearchHit(SearchSourceReference Source, double Score);
 
