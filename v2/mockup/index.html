@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Personal OS — База знаний</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="knowledge-search.css" />
+  <link rel="stylesheet" href="chat.css" />
+</head>
+<body>
+  <main id="kb-fixed-drop">
+    <div class="phone">
+      <div class="body">
+        <header class="topline">
+          <div class="header-copy">
+            <div class="eyebrow">Personal OS</div>
+            <div id="titleFX" class="heading">База знаний</div>
+          </div>
+          <button id="agentChatFX" type="button" class="chat-head-btn" aria-label="Открыть чат с агентом" title="Чат с агентом">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17.2 4 20v-4.9A7.4 7.4 0 0 1 3 11.4C3 7.3 6.8 4 11.5 4S20 7.3 20 11.4s-3.8 7.4-8.5 7.4c-1.6 0-3.1-.4-4.3-1.1Z"></path><path d="m16.9 2.7.45 1.15 1.15.45-1.15.45-.45 1.15-.45-1.15-1.15-.45 1.15-.45.45-1.15Z"></path></svg>
+          </button>
+          <button id="chatHistoryFX" type="button" class="chat-head-btn" aria-label="История чатов" title="История чатов" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6M4 4v4.6h4.6M12 7.5V12l3 2"></path></svg>
+          </button>
+        </header>
+
+        <section id="knowledgeFX" class="knowledge-section">
+          <div class="toolbar">
+            <label class="search">
+              <span>⌕</span>
+              <input id="searchFX" type="text" autocomplete="off" placeholder="Поиск в базе знаний…" />
+              <button id="clearFX" type="button" class="clear">×</button>
+            </label>
+            <button id="toggleKnowledgeSectionsFX" type="button" class="collapse-toggle" aria-label="Свернуть все разделы" title="Свернуть все разделы"></button>
+            <button id="knowledgeOrderFX" type="button" class="order-mode-toggle" aria-label="Включить сортировку" aria-pressed="false" title="Включить сортировку"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M4 12h11M4 17h11M19 6v12m-2.5-2.5L19 18l2.5-2.5" /></svg></button>
+            <button id="addFX" type="button" class="plus">＋</button>
+          </div>
+          <div id="scrollFX" class="scroll">
+            <div id="treeFX" class="tree"></div>
+            <div id="resultsFX" hidden></div>
+          </div>
+        </section>
+
+        <section id="docFX" class="scroll" hidden>
+          <div class="doc-detail-top">
+            <button id="backFX" type="button" class="doc-action doc-back doc-detail-back">← Назад</button>
+          </div>
+          <div class="doc-title-wrap">
+            <button id="docTitleFX" type="button" class="doc-open-title"></button>
+            <input id="docTitleInputFX" class="doc-title-input" type="text" hidden />
+          </div>
+          <div class="doc-content-card">
+            <div id="docContentFX" class="doc-open-content"></div>
+            <textarea id="docContentInputFX" class="doc-content-input" hidden></textarea>
+          </div>
+          <div class="doc-detail-bottom-actions">
+            <button id="deleteFX" type="button" class="doc-delete-icon" aria-label="Удалить документ" title="Удалить документ"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="m6 7 1 13h10l1-13"></path><path d="M10 11v5M14 11v5"></path></svg></button>
+          </div>
+        </section>
+
+        <section id="planningFX" class="planning-section" hidden>
+          <div id="planningToolbarFX" class="planning-toolbar"></div>
+          <div id="planningScrollFX" class="scroll planning-scroll"></div>
+        </section>
+
+        <section id="tasksFX" class="tasks-section" hidden>
+          <div id="taskBoardFX" class="task-board">
+            <div class="task-toolbar">
+              <div class="task-tabs" role="tablist" aria-label="Режим задач">
+                <button type="button" class="task-tab active" data-task-tab="backlog">Backlog</button>
+                <button type="button" class="task-tab" data-task-tab="today">Сегодня</button>
+              </div>
+              <div class="task-toolbar-actions">
+                <button id="toggleTaskSectionsFX" type="button" class="task-icon-button" aria-label="Свернуть все разделы" title="Свернуть все разделы"></button>
+                <button id="taskOrderFX" type="button" class="order-mode-toggle" aria-label="Включить сортировку" aria-pressed="false" title="Включить сортировку"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M4 12h11M4 17h11M19 6v12m-2.5-2.5L19 18l2.5-2.5" /></svg></button>
+                <button id="addTaskFX" type="button" class="plus" aria-label="Создать задачу или раздел">＋</button>
+              </div>
+            </div>
+
+            <div id="taskArchiveTopFX" class="task-archive-top" hidden>
+              <button id="taskArchiveBackFX" type="button" class="task-archive-back">← Назад</button>
+              <div class="task-archive-title">Архив</div>
+            </div>
+
+            <div id="taskFiltersFX" class="task-filters" hidden>
+              <button type="button" class="task-filter active" data-task-filter="all">Все</button>
+              <button type="button" class="task-filter task-today-filter" data-task-filter="new"><span class="task-filter-dot new"></span>Новые</button>
+              <button type="button" class="task-filter task-today-filter" data-task-filter="in_progress"><span class="task-filter-dot work"></span>В работе</button>
+              <button type="button" class="task-filter task-today-filter" data-task-filter="completed"><span class="task-filter-dot done"></span>Готово</button>
+            </div>
+
+            <div id="taskScrollFX" class="scroll task-scroll">
+              <div id="taskGroupsFX" class="task-groups"></div>
+              <div id="taskEmptyFX" class="task-empty" hidden>Здесь пока нет задач.</div>
+            </div>
+            <div id="taskArchiveBarFX" class="task-archive-bar" hidden>
+              <button id="taskArchiveOpenFX" type="button" class="task-archive-link">Архив</button>
+            </div>
+          </div>
+
+          <section id="taskDetailFX" class="scroll task-detail" hidden>
+            <div class="task-detail-top">
+              <button id="taskBackFX" type="button" class="doc-action doc-back task-detail-back">← Назад</button>
+            </div>
+            <div class="task-detail-meta"><span id="taskSectionFX" class="task-detail-section"></span></div>
+            <div class="task-detail-title-wrap">
+              <button id="taskTitleFX" type="button" class="task-title-open"></button>
+              <input id="taskTitleInputFX" class="task-title-detail-input" type="text" hidden />
+            </div>
+            <div class="task-detail-description-card">
+                <div id="taskDescriptionFX" class="task-description"></div>
+              <textarea id="taskDescriptionInputFX" class="task-description-input" hidden></textarea>
+            </div>
+            <div class="task-detail-bottom-actions">
+              <button id="taskMoveFX" type="button" class="task-detail-pill action-move"></button>
+              <button id="taskStatusFX" type="button" class="task-detail-pill action-status" hidden></button>
+              <button id="taskDeleteFX" type="button" class="task-delete-icon" aria-label="Удалить задачу"></button>
+            </div>
+          </section>
+          <div id="taskToastFX" class="task-toast" role="status" aria-live="polite"></div>
+        </section>
+
+        <section id="chatFX" class="chat-section" hidden>
+          <div class="chat-back-row">
+            <button id="chatBackFX" type="button" class="doc-action doc-back">← Назад</button>
+          </div>
+          <div id="chatScrollFX" class="chat-scroll">
+            <div id="chatListFX" class="chat-list" aria-live="polite">
+              <div class="chat-row user"><div class="chat-bubble">Что у меня сейчас по проекту?</div></div>
+              <div class="chat-row agent"><div class="chat-bubble">Сейчас активна работа над интерфейсом Personal OS. Могу использовать Базу знаний, Планирование и Задачи как общий контекст.</div></div>
+              <div class="chat-row user"><div class="chat-bubble">Какие задачи ближайшие?</div></div>
+              <div class="chat-row agent"><div class="chat-bubble">Могу собрать ближайшие задачи из «Сегодня» и текущей фичи.</div></div>
+            </div>
+          </div>
+          <form id="chatFormFX" class="chat-composer">
+            <textarea id="chatInputFX" class="chat-input" rows="1" placeholder="Сообщение агенту…" aria-label="Сообщение агенту"></textarea>
+            <button type="submit" class="chat-send" aria-label="Отправить">↑</button>
+          </form>
+        </section>
+
+        <section id="placeholderFX" class="placeholder" hidden></section>
+      </div>
+
+      <div class="bottom-window">
+        <nav id="bottomNav" class="bottom-nav" aria-label="Навигация">
+          <button data-page="knowledge" class="bottom-item active" type="button"><span class="nav-icon">▤</span><span>База знаний</span></button>
+          <button data-page="planning" class="bottom-item" type="button"><span class="nav-icon">▦</span><span>Планирование</span></button>
+          <button data-page="tasks" class="bottom-item" type="button"><span class="nav-icon">☑</span><span>Задачи</span></button>
+          <button data-page="testing" class="bottom-item" type="button"><span class="nav-icon">◈</span><span>Тестирование</span></button>
+        </nav>
+      </div>
+
+      <div id="overlayFX" class="overlay"></div>
+
+      <section id="createFX" class="sheet">
+        <div class="sheet-head">
+          <div id="createTitleFX" class="sheet-title">Новый документ</div>
+          <button id="closeFX" type="button" class="sheet-close">×</button>
+        </div>
+        <div class="type-switch">
+          <button id="typeDocFX" type="button" class="type-btn active">Документ</button>
+          <button id="typeSectionFX" type="button" class="type-btn">Раздел</button>
+        </div>
+        <input id="nameFX" class="name-field" type="text" placeholder="Название документа" />
+        <button id="whereFX" type="button" class="where">
+          <span id="whereValueFX" class="where-value">Верхний уровень</span>
+          <span class="where-arrow">›</span>
+        </button>
+        <div id="parentListFX" class="parent-list"></div>
+        <button id="submitFX" type="button" class="create-submit">Создать</button>
+      </section>
+
+      <section id="planningSheetFX" class="sheet planning-sheet" aria-label="Редактор планирования">
+        <div class="sheet-head">
+          <div id="planningSheetTitleFX" class="sheet-title"></div>
+          <button id="planningSheetCloseFX" type="button" class="sheet-close" aria-label="Закрыть">×</button>
+        </div>
+        <div id="planningSheetContextFX" class="planning-sheet-context"></div>
+        <label class="planning-field-label" for="planningNameFX">Название</label>
+        <input id="planningNameFX" class="name-field" type="text" maxlength="90" />
+        <label id="planningDescriptionLabelFX" class="planning-field-label" for="planningDescriptionFX">Описание</label>
+        <textarea id="planningDescriptionFX" class="planning-description-field" rows="3" maxlength="600"></textarea>
+        <button id="planningSheetSaveFX" type="button" class="create-submit">Сохранить</button>
+        <button id="planningSheetDeleteFX" type="button" class="planning-sheet-delete" hidden>Удалить</button>
+      </section>
+
+      <section id="taskCreateFX" class="sheet task-create-sheet" aria-label="Создание задачи">
+        <div class="sheet-head">
+          <div id="taskCreateTitleFX" class="sheet-title">Новая задача</div>
+          <button id="taskCreateCloseFX" type="button" class="sheet-close">×</button>
+        </div>
+        <div class="type-switch"><button id="taskTypeTaskFX" class="type-btn active" type="button">Задача</button><button id="taskTypeSectionFX" class="type-btn" type="button">Раздел</button></div><input id="taskNameFX" class="name-field" type="text" placeholder="Название задачи" /><textarea id="taskDescriptionCreateFX" class="task-create-description" rows="3" placeholder="Описание задачи"></textarea><button id="taskWhereFX" class="where" type="button"><span id="taskWhereValueFX" class="where-value">Личное</span><span>›</span></button><div id="taskSectionListFX" class="parent-list"></div><button id="taskCreateSubmitFX" class="create-submit" type="button">Создать</button>
+      </section>
+
+      <div id="chatHistoryOverlayFX" class="chat-history-overlay" aria-hidden="true">
+        <div class="chat-history-sheet" role="dialog" aria-modal="true" aria-label="История чатов">
+          <div class="chat-history-head">
+            <div class="chat-history-title">История чатов</div>
+            <button id="chatNewFX" type="button" class="chat-new">Новый чат</button>
+            <button id="chatHistoryCloseFX" type="button" class="chat-history-close" aria-label="Закрыть">×</button>
+          </div>
+          <button type="button" class="chat-history-item" data-chat-history="Интерфейс Personal OS"><strong>Интерфейс Personal OS</strong><span>Сегодня</span></button>
+          <button type="button" class="chat-history-item" data-chat-history="Планирование проекта"><strong>Планирование проекта</strong><span>Вчера</span></button>
+          <button type="button" class="chat-history-item" data-chat-history="Поиск по базе знаний"><strong>Поиск по базе знаний</strong><span>24 сентября</span></button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="model.js?v=plan-return-1"></script>
+  <script src="context-menu.js"></script>
+  <script src="app.js"></script>
+  <script src="planning.js?v=plan-return-2"></script>
+  <script src="tasks.js?v=plan-return-1"></script>
+  <script src="chat.js"></script>
+</body>
+</html>

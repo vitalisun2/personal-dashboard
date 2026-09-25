@@ -1,0 +1,31 @@
+/* Expanding knowledge search: keeps toolbar controls in place beneath the field. */
+#kb-fixed-drop #knowledgeFX .toolbar {
+  position: relative;
+}
+
+#kb-fixed-drop #knowledgeFX .toolbar > .search {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  width: calc(100% - (3 * var(--toolbar-control-size) + 3 * var(--toolbar-gap)));
+  flex: none;
+  transition: width 220ms cubic-bezier(.2, .75, .25, 1), box-shadow 180ms ease,
+    background 180ms ease;
+}
+
+#kb-fixed-drop #knowledgeFX .toolbar > .collapse-toggle {
+  margin-left: auto;
+}
+
+#kb-fixed-drop #knowledgeFX .toolbar.search-expanded > .search {
+  z-index: 4;
+  width: 100%;
+  background: linear-gradient(100deg, #1b2935, #243442);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .36), 0 0 0 1px #34495b;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #kb-fixed-drop #knowledgeFX .toolbar > .search {
+    transition: none;
+  }
+}
