@@ -311,7 +311,7 @@ watch(documentId, () => { titleEditing.value = false; markdownEditing.value = fa
       </article>
     </template>
     <template v-else>
-      <div class="knowledge-toolbar">
+      <div class="knowledge-toolbar" :class="{ 'is-searching': isSearching }">
         <label class="knowledge-search"><span aria-hidden="true">⌕</span><input v-model="query" type="search" placeholder="Поиск в базе знаний…" aria-label="Поиск в базе знаний"><button v-if="query" type="button" aria-label="Очистить поиск" @click="query = ''">×</button></label>
         <button type="button" class="knowledge-icon-button" :aria-label="expanded.size === sections.length ? 'Свернуть все разделы' : 'Развернуть все разделы'" @click="toggleAll">⌄</button>
         <button type="button" class="knowledge-icon-button" :aria-pressed="orderMode" :title="orderMode ? 'Выключить сортировку' : 'Включить сортировку'" @click="orderMode = !orderMode">↕</button>

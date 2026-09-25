@@ -4,6 +4,7 @@
 .knowledge-header h1 { font-size: clamp(25px, 3vw, 32px); }
 .knowledge-chat, .knowledge-icon-button, .knowledge-add { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--kb-line); border-radius: 12px; background: var(--kb-surface); color: #c6d8f6; cursor: pointer; font-size: 22px; }
 .knowledge-toolbar { position: relative; display: flex; gap: 8px; align-items: center; margin: 20px 0 14px; }
+.knowledge-toolbar.is-searching > .knowledge-icon-button, .knowledge-toolbar.is-searching > .knowledge-add { display: none; }
 .knowledge-search { display: flex; min-width: 0; height: 48px; flex: 1; align-items: center; gap: 9px; padding: 0 12px; border: 1px solid var(--kb-line); border-radius: 12px; background: linear-gradient(90deg, var(--kb-surface), var(--kb-surface-2)); color: var(--kb-muted); }
 .knowledge-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--kb-ink); background: transparent; font: inherit; font-size: 15px; }
 .knowledge-search input::placeholder { color: var(--kb-muted); opacity: 1; }
