@@ -6,71 +6,39 @@ import { subscribeSyncStatus, type SyncStatus } from '../offline/runtime'
 const route = useRoute()
 const navigation = [
   { path: '/knowledge', label: 'База знаний', icon: '▤' },
-  { path: '/planning', label: 'Планирование', icon: '⌁' },
-  { path: '/tasks', label: 'Задачи', icon: '✓' },
+  { path: '/planning', label: 'Планирование', icon: '▦' },
+  { path: '/tasks', label: 'Задачи', icon: '☑' },
 ]
 const currentSection = computed(() => String(route.path.split('/')[1] || 'knowledge'))
+const titles: Record<string, string> = { knowledge: 'База знаний', planning: 'Планирование', tasks: 'Задачи', chat: 'Агент', search: 'Поиск' }
+const title = computed(() => titles[currentSection.value] || 'База знаний')
 const syncStatus = ref<SyncStatus>('ready')
-const syncLabel = computed(() => ({
-  ready: 'Синхронизировано',
-  syncing: 'Синхронизация…',
-  offline: 'Офлайн',
-  conflict: 'Есть конфликты',
-  error: 'Ожидает соединения',
-})[syncStatus.value])
 let unsubscribeSyncStatus: (() => void) | undefined
 onMounted(() => { unsubscribeSyncStatus = subscribeSyncStatus(next => { syncStatus.value = next }) })
 onUnmounted(() => unsubscribeSyncStatus?.())
 </script>
 
 <template>
-  <div class="app-frame">
-    <aside class="sidebar">
-      <RouterLink class="brand" to="/knowledge" aria-label="Personal OS, главная">
-        <span class="brand-mark">P</span>
-        <span>Personal OS</span>
-      </RouterLink>
-      <nav class="primary-nav" aria-label="Основные разделы">
-        <RouterLink
-          v-for="item in navigation"
-          :key="item.path"
-          :to="item.path"
-          class="nav-link"
-          :class="{ selected: currentSection === item.path.slice(1) }"
-        >
-          <span class="nav-icon" aria-hidden="true">{{ item.icon }}</span>
-          <span>{{ item.label }}</span>
+  <main class="app-frame">
+    <div class="phone-shell">
+      <div class="app-body">
+        <header class="topline">
+          <div class="header-copy">
+            <div class="eyebrow">Personal OS</div>
+            <h1 class="heading">{{ title }}</h1>
+          </div>
+          <RouterLink class="chat-head-btn" to="/chat" aria-label="Открыть чат с агентом" title="Чат с агентом">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17.2 4 20v-4.9A7.4 7.4 0 0 1 3 11.4C3 7.3 6.8 4 11.5 4S20 7.3 20 11.4s-3.8 7.4-8.5 7.4c-1.6 0-3.1-.4-4.3-1.1Z"/><path d="m16.9 2.7.45 1.15 1.15.45-1.15.45-.45 1.15-.45-1.15-1.15-.45 1.15-.45.45-1.15Z"/></svg>
+          </RouterLink>
+          <span class="sync-status" :data-status="syncStatus" aria-live="polite">{{ syncStatus }}</span>
+        </header>
+        <div class="page-content"><RouterView /></div>
+      </div>
+      <nav class="bottom-window" aria-label="Навигация">
+        <RouterLink v-for="item in navigation" :key="item.path" :to="item.path" class="bottom-item" :class="{ active: currentSection === item.path.slice(1) }">
+          <span class="nav-icon" aria-hidden="true">{{ item.icon }}</span><span>{{ item.label }}</span>
         </RouterLink>
       </nav>
-      <div class="sidebar-bottom">
-        <span class="sync-indicator" :class="`sync-${syncStatus}`"><span></span>{{ syncLabel }}</span>
-      </div>
-    </aside>
-
-    <main class="main-column">
-      <header class="topbar">
-        <div class="topbar-title">{{ currentSection === 'chat' ? 'Агент' : 'Ваше пространство' }}</div>
-        <RouterLink class="chat-link" to="/chat" :aria-current="currentSection === 'chat' ? 'page' : undefined">
-          <span aria-hidden="true">◌</span>
-          <span>Чат</span>
-        </RouterLink>
-      </header>
-      <div class="page-content">
-        <RouterView />
-      </div>
-    </main>
-
-    <nav class="mobile-nav" aria-label="Основные разделы">
-      <RouterLink
-        v-for="item in navigation"
-        :key="item.path"
-        :to="item.path"
-        class="mobile-nav-link"
-        :class="{ selected: currentSection === item.path.slice(1) }"
-      >
-        <span aria-hidden="true">{{ item.icon }}</span>
-        <span>{{ item.label }}</span>
-      </RouterLink>
-    </nav>
-  </div>
+    </div>
+  </main>
 </template>

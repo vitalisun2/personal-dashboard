@@ -297,7 +297,7 @@ watch(documentId, () => { titleEditing.value = false; markdownEditing.value = fa
   <section class="knowledge-module" aria-labelledby="knowledge-heading">
     <header class="knowledge-header">
       <div><p class="eyebrow">Personal OS</p><h1 id="knowledge-heading">{{ document ? 'База знаний' : 'База знаний' }}</h1></div>
-      <button class="knowledge-chat" type="button" aria-label="Открыть чат с документом" @click="focusChat">◌</button>
+      <button class="knowledge-chat" type="button" aria-label="Открыть чат с документом" @click="focusChat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17.2 4 20v-4.9A7.4 7.4 0 0 1 3 11.4C3 7.3 6.8 4 11.5 4S20 7.3 20 11.4s-3.8 7.4-8.5 7.4c-1.6 0-3.1-.4-4.3-1.1Z"/><path d="m16.9 2.7.45 1.15 1.15.45-1.15.45-.45 1.15-.45-1.15-1.15-.45 1.15-.45.45-1.15Z"/></svg></button>
     </header>
     <div class="knowledge-sync" role="status">
       <span>{{ syncStatus === 'offline' || !isOnline ? 'Офлайн: локальная копия' : syncStatus === 'syncing' ? 'Синхронизация…' : syncStatus === 'error' ? 'Ошибка синхронизации' : conflicts ? 'Нужна проверка конфликта' : pendingCount ? 'Ожидает синхронизации' : 'Синхронизировано' }}</span>
@@ -312,7 +312,7 @@ watch(documentId, () => { titleEditing.value = false; markdownEditing.value = fa
     </section>
 
     <template v-if="document">
-      <div class="knowledge-detail-top"><button type="button" class="knowledge-back" @click="backToTree">← Назад</button><span>{{ document.path }}</span></div>
+      <div class="knowledge-detail-top"><button type="button" class="knowledge-back" @click="backToTree">← Назад</button></div>
       <article class="knowledge-document">
         <h2 v-if="!titleEditing" class="knowledge-title-read" @click="editTitle">{{ document.title }}</h2>
         <input v-else ref="titleInput" class="knowledge-title-input" :value="document.title" aria-label="Название документа" @blur="saveDocumentTitle" @keydown.enter="($event.target as HTMLInputElement).blur()" @keydown.esc="($event.target as HTMLInputElement).blur()">
@@ -322,10 +322,10 @@ watch(documentId, () => { titleEditing.value = false; markdownEditing.value = fa
       </article>
     </template>
     <template v-else>
-      <div class="knowledge-toolbar" :class="{ 'is-searching': isSearching }">
+      <div class="knowledge-toolbar" :class="{ 'search-expanded': isSearching }">
         <label class="knowledge-search"><span aria-hidden="true">⌕</span><input v-model="query" type="search" placeholder="Поиск в базе знаний…" aria-label="Поиск в базе знаний"><button v-if="query" type="button" aria-label="Очистить поиск" @click="query = ''">×</button></label>
-        <button type="button" class="knowledge-icon-button" :aria-label="expanded.size === sections.length ? 'Свернуть все разделы' : 'Развернуть все разделы'" @click="toggleAll">⌄</button>
-        <button type="button" class="knowledge-icon-button" :aria-pressed="orderMode" :title="orderMode ? 'Выключить сортировку' : 'Включить сортировку'" @click="orderMode = !orderMode">↕</button>
+        <button type="button" class="knowledge-icon-button collapse-toggle" :aria-label="sections.length && sections.every(node => expanded.has(node.id)) ? 'Свернуть все разделы' : 'Развернуть все разделы'" @click="toggleAll"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5M7 15l5-5 5 5"/></svg></button>
+        <button type="button" class="knowledge-icon-button order-mode-toggle" :disabled="isSearching" :aria-pressed="orderMode" :aria-label="orderMode ? 'Выключить сортировку' : 'Включить сортировку'" :title="orderMode ? 'Выключить сортировку' : 'Включить сортировку'" @click="orderMode = !orderMode"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M4 12h11M4 17h11M19 6v12m-2.5-2.5L19 18l2.5-2.5"/></svg></button>
         <button type="button" class="knowledge-add" aria-label="Создать документ или раздел" @click="openCreate()">＋</button>
       </div>
       <div v-if="isSearching" class="knowledge-results">
@@ -502,7 +502,7 @@ const KnowledgeTreeNodes = defineComponent({
     })
     const draw = (items: KNode[], depth = 0): VNode[] => items.flatMap((node, index) => {
       const row = h('div', { class: ['knowledge-row', `is-${node.kind}`], 'data-id': node.id, style: { '--depth': depth }, onPointerdown: (event: PointerEvent) => pointerDown(node, event), onContextmenu: (event: MouseEvent) => { event.preventDefault(); if (!props.orderMode) emit('menu', node.id) } }, [
-        node.kind === 'section' ? h('button', { class: 'knowledge-chevron', type: 'button', onClick: () => emit('toggle', node.id), 'aria-label': props.expanded.has(node.id) ? 'Свернуть раздел' : 'Раскрыть раздел' }, props.expanded.has(node.id) ? '⌄' : '›') : h('span', { class: 'knowledge-file-icon', 'aria-hidden': 'true' }, '▤'),
+        node.kind === 'section' ? h('button', { class: ['knowledge-chevron', { open: props.expanded.has(node.id) }], type: 'button', onClick: () => emit('toggle', node.id), 'aria-label': props.expanded.has(node.id) ? 'Свернуть раздел' : 'Раскрыть раздел' }, '›') : null,
         h('button', { class: 'knowledge-node-name', type: 'button', onClick: () => { if (Date.now() < suppressedClickUntil || props.orderMode) return; node.kind === 'section' ? emit('toggle', node.id) : emit('open', node.id) } }, node.title),
         props.orderMode ? h('button', { class: 'knowledge-drag-handle', type: 'button', 'aria-label': `Перетащить ${node.title}`, onPointerdown: (event: PointerEvent) => startDrag(node, event) }, '⠿') : h('button', { class: 'knowledge-menu-trigger', type: 'button', 'aria-label': `Действия: ${node.title}`, 'aria-expanded': props.menuId === node.id, onClick: () => emit('menu', node.id) }, '⋯'),
         props.menuId === node.id && !props.orderMode ? h('div', { class: 'knowledge-context-menu', role: 'menu' }, [

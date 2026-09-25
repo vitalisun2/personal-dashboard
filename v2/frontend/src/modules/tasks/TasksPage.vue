@@ -332,8 +332,8 @@ onMounted(refresh)
 
 <template>
   <section class="tracker-page" aria-labelledby="tasks-heading">
-    <div class="tracker-heading"><div><p class="eyebrow">Действовать сегодня</p><h1 id="tasks-heading">Задачи</h1></div><button class="primary-button" @click="state.creating = !state.creating">＋ Новая задача</button></div>
-    <div class="tracker-tabs"><button :class="{ active: !state.archive && state.bucket === 'Backlog' }" @click="selectBucket('Backlog')">Backlog</button><button :class="{ active: !state.archive && state.bucket === 'Сегодня' }" @click="selectBucket('Сегодня')">Сегодня</button><button :class="{ active: state.archive }" @click="state.archive = true; state.orderMode = false; state.filter = 'all'; state.detail = null; void refresh()">Архив</button><span class="tab-spacer"/><button v-if="!state.archive" class="quiet-button" @click="toggleAllSections">{{ state.expanded[state.bucket].size === state.sections.length && state.sections.length ? 'Свернуть все' : 'Развернуть все' }}</button><button v-if="!state.archive" class="quiet-button" :class="{ active: state.orderMode }" :aria-pressed="state.orderMode" @click="state.orderMode = !state.orderMode">{{ state.orderMode ? 'Готово' : 'Сортировка' }}</button><button v-if="!state.archive" class="quiet-button" @click="state.creatingSection = !state.creatingSection">＋ Раздел</button></div>
+    <div class="tracker-tabs" role="tablist" aria-label="Режим задач"><button class="task-tab" :class="{ active: !state.archive && state.bucket === 'Backlog' }" @click="selectBucket('Backlog')">Backlog</button><button class="task-tab" :class="{ active: !state.archive && state.bucket === 'Сегодня' }" @click="selectBucket('Сегодня')">Сегодня</button><div class="tab-spacer"/><button v-if="!state.archive" class="task-toolbar-icon" aria-label="Свернуть все разделы" @click="toggleAllSections">⌄</button><button v-if="!state.archive" class="task-toolbar-icon" :class="{ active: state.orderMode }" :aria-pressed="state.orderMode" :aria-label="state.orderMode ? 'Готово' : 'Сортировка'" @click="state.orderMode = !state.orderMode">⇵</button><button v-if="!state.archive" class="task-toolbar-icon" aria-label="Создать задачу или раздел" @click="state.creating = !state.creating">＋</button></div>
+    <div v-if="state.archive" class="task-archive-top"><button class="task-archive-back" @click="state.archive = false; void refresh()">← Назад</button><div class="task-archive-title">Архив</div></div>
     <div v-if="state.error" class="tracker-error" role="alert">{{ state.error }} <button @click="state.error = ''">×</button></div>
     <form v-if="state.creating || state.creatingSection" class="tracker-editor" @submit.prevent="state.creating ? createTask() : createSection()">
       <label>{{ state.creatingSection ? 'Название раздела' : 'Название задачи' }}<input v-model="state.title" autofocus maxlength="160" required /></label>
@@ -374,6 +374,7 @@ onMounted(refresh)
           <div v-if="state.contextTaskId === task.id" class="context-actions"><button v-if="task.location === 'backlog'" class="quiet-button" @click="mutate(task, 'planning'); state.contextTaskId = ''">Вернуть в планирование</button><button class="quiet-button" @click="archiveTask(task); state.contextTaskId = ''">В архив</button></div>
         </div>
       </section>
+      <div v-if="!state.archive" class="task-archive-bar"><button class="task-archive-link" @click="state.archive = true; state.orderMode = false; state.filter = 'all'; state.detail = null; void refresh()">Архив</button></div>
     </div>
   </section>
 </template>

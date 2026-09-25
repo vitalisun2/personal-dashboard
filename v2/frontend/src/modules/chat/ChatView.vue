@@ -225,16 +225,8 @@ onBeforeUnmount(() => {
   <section class="chat-view" aria-label="Чат с агентом">
     <header class="chat-header">
       <button class="quiet-button" type="button" aria-label="Назад" @click="emit('back')">← Назад</button>
-      <div class="chat-heading">
-        <h1>Агент</h1>
-        <div v-if="entity" class="scope-switch" role="group" aria-label="Контекст сообщений">
-          <button type="button" :aria-pressed="scopeMode === 'entity'" @click="setScopeMode('entity')">{{ entity.label }}</button>
-          <button type="button" :aria-pressed="scopeMode === 'general'" @click="setScopeMode('general')">Общий чат</button>
-        </div>
-      </div>
       <div class="chat-header-actions">
         <label class="model-select-label">
-          <span>Модель</span>
           <select v-model="selectedModel" aria-label="Модель следующего ответа">
             <option value="Gemma">Gemma</option>
             <option value="DeepSeek">DeepSeek</option>
@@ -243,6 +235,10 @@ onBeforeUnmount(() => {
         <button class="quiet-button" type="button" @click="openHistory">История</button>
       </div>
     </header>
+    <div v-if="entity" class="scope-switch" role="group" aria-label="Контекст сообщений">
+      <button type="button" :aria-pressed="scopeMode === 'entity'" @click="setScopeMode('entity')">{{ entity.label }}</button>
+      <button type="button" :aria-pressed="scopeMode === 'general'" @click="setScopeMode('general')">Общий контекст</button>
+    </div>
 
     <div ref="scrollContainer" class="chat-scroll" aria-live="polite" :aria-busy="loading || sending">
       <button v-if="conversation?.nextCursor" class="load-older" type="button" :disabled="loadingOlder" @click="loadOlderTurns">
