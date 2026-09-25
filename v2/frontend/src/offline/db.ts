@@ -59,7 +59,7 @@ export class IndexedDbOfflineStore implements OfflineStore {
     }
     const transaction = this.database.transaction(["entities", "operations"], "readwrite");
     transaction.objectStore("entities").put(entity);
-    transaction.objectStore("operations").put(operation);
+    transaction.objectStore("operations").add(operation);
     await transactionDone(transaction);
   }
 
@@ -76,7 +76,9 @@ export class IndexedDbOfflineStore implements OfflineStore {
   }
 
   async enqueueOperation(operation: SyncOperation): Promise<void> {
-    await this.write("operations", operation);
+    const transaction = this.database.transaction("operations", "readwrite");
+    transaction.objectStore("operations").add(operation);
+    await transactionDone(transaction);
   }
 
   async listPendingOperations(): Promise<SyncOperation[]> {

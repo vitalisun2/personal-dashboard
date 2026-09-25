@@ -62,3 +62,34 @@ test('a version conflict preserves local work and blocks later edits for that en
   assert.deepEqual(pending.map(operation => operation.operationId), ['edit-1', 'edit-2']);
   assert.equal(store.cursor, 3);
 });
+
+test('an in-flight push does not replace a newer local edit of the same entity', async () => {
+  const first = { operationId: 'first', type: 'tasks.task', id: 'task-a', kind: 'upsert', expectedVersion: 1, payload: { title: 'First edit' }, createdAt: '2026-09-25T10:00:00Z' };
+  const second = { operationId: 'second', type: 'tasks.task', id: 'task-a', kind: 'upsert', expectedVersion: 2, payload: { title: 'Second edit' }, createdAt: '2026-09-25T10:01:00Z' };
+  const pending = [first];
+  let local = { type: 'tasks.task', id: 'task-a', version: 3, deleted: false, payload: { title: 'Second edit' } };
+  const store = {
+    async listPendingOperations() { return [...pending]; },
+    async removeOperation(id) { pending.splice(pending.findIndex(operation => operation.operationId === id), 1); },
+    async putEntity(entity) { local = entity; },
+    async getEntity() { return local; },
+    async putConflict() { throw new Error('Unexpected conflict'); },
+    async getChangeCursor() { return 0; },
+    async setChangeCursor() {},
+  };
+  const transport = {
+    async pushOperations() {
+      pending.push(second);
+      return [{ operationId: 'first', applied: true, skipped: false, current: { type: 'tasks.task', id: 'task-a', version: 2, deleted: false, payload: { title: 'First edit' } }, conflictReason: null }];
+    },
+    async pullChanges() {
+      return { changes: [{ sequence: 1, snapshot: { type: 'tasks.task', id: 'task-a', version: 2, deleted: false, payload: { title: 'First edit' } } }], nextSequence: 1, isComplete: true };
+    },
+  };
+
+  const summary = await syncPendingOperations(store, transport);
+
+  assert.deepEqual(summary, { applied: 1, conflicts: 0, pulled: 1 });
+  assert.deepEqual(local.payload, { title: 'Second edit' });
+  assert.deepEqual(pending.map(operation => operation.operationId), ['second']);
+});
