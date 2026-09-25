@@ -1,0 +1,92 @@
+<Solution>
+  <Folder Name="/backend/" />
+  <Folder Name="/backend/src/" />
+  <Folder Name="/backend/src/Contracts/">
+    <Project Path="backend/src/Contracts/PersonalDashboard.V2.Contracts.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Host/">
+    <Project Path="backend/src/Host/PersonalDashboard.V2.Host.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/" />
+  <Folder Name="/backend/src/Modules/Agent/" />
+  <Folder Name="/backend/src/Modules/Agent/Api/">
+    <Project Path="backend/src/Modules/Agent/Api/PersonalDashboard.V2.Agent.Api.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Agent/Application/">
+    <Project Path="backend/src/Modules/Agent/Application/PersonalDashboard.V2.Agent.Application.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Agent/Domain/">
+    <Project Path="backend/src/Modules/Agent/Domain/PersonalDashboard.V2.Agent.Domain.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Agent/Infrastructure/">
+    <Project Path="backend/src/Modules/Agent/Infrastructure/PersonalDashboard.V2.Agent.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Chat/" />
+  <Folder Name="/backend/src/Modules/Chat/Api/">
+    <Project Path="backend/src/Modules/Chat/Api/PersonalDashboard.V2.Chat.Api.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Chat/Application/">
+    <Project Path="backend/src/Modules/Chat/Application/PersonalDashboard.V2.Chat.Application.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Chat/Domain/">
+    <Project Path="backend/src/Modules/Chat/Domain/PersonalDashboard.V2.Chat.Domain.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Chat/Infrastructure/">
+    <Project Path="backend/src/Modules/Chat/Infrastructure/PersonalDashboard.V2.Chat.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Knowledge/" />
+  <Folder Name="/backend/src/Modules/Knowledge/Api/">
+    <Project Path="backend/src/Modules/Knowledge/Api/PersonalDashboard.V2.Knowledge.Api.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Knowledge/Application/">
+    <Project Path="backend/src/Modules/Knowledge/Application/PersonalDashboard.V2.Knowledge.Application.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Knowledge/Domain/">
+    <Project Path="backend/src/Modules/Knowledge/Domain/PersonalDashboard.V2.Knowledge.Domain.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Knowledge/Infrastructure/">
+    <Project Path="backend/src/Modules/Knowledge/Infrastructure/PersonalDashboard.V2.Knowledge.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Planning/" />
+  <Folder Name="/backend/src/Modules/Planning/Api/">
+    <Project Path="backend/src/Modules/Planning/Api/PersonalDashboard.V2.Planning.Api.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Planning/Application/">
+    <Project Path="backend/src/Modules/Planning/Application/PersonalDashboard.V2.Planning.Application.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Planning/Domain/">
+    <Project Path="backend/src/Modules/Planning/Domain/PersonalDashboard.V2.Planning.Domain.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Planning/Infrastructure/">
+    <Project Path="backend/src/Modules/Planning/Infrastructure/PersonalDashboard.V2.Planning.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Search/" />
+  <Folder Name="/backend/src/Modules/Search/Api/">
+    <Project Path="backend/src/Modules/Search/Api/PersonalDashboard.V2.Search.Api.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Search/Application/">
+    <Project Path="backend/src/Modules/Search/Application/PersonalDashboard.V2.Search.Application.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Search/Domain/">
+    <Project Path="backend/src/Modules/Search/Domain/PersonalDashboard.V2.Search.Domain.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Search/Infrastructure/">
+    <Project Path="backend/src/Modules/Search/Infrastructure/PersonalDashboard.V2.Search.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Tasks/" />
+  <Folder Name="/backend/src/Modules/Tasks/Api/">
+    <Project Path="backend/src/Modules/Tasks/Api/PersonalDashboard.V2.Tasks.Api.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Tasks/Application/">
+    <Project Path="backend/src/Modules/Tasks/Application/PersonalDashboard.V2.Tasks.Application.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Tasks/Domain/">
+    <Project Path="backend/src/Modules/Tasks/Domain/PersonalDashboard.V2.Tasks.Domain.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Modules/Tasks/Infrastructure/">
+    <Project Path="backend/src/Modules/Tasks/Infrastructure/PersonalDashboard.V2.Tasks.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/backend/src/Platform/">
+    <Project Path="backend/src/Platform/PersonalDashboard.V2.Platform.csproj" />
+  </Folder>
+</Solution>
