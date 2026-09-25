@@ -172,7 +172,7 @@ public sealed class AgentTurnService(
         var resolvedScope = await ResolveScopeAsync(request.Scope, cancellationToken);
         var messages = new List<ModelMessage>
         {
-            new("system", "You are the Personal OS assistant. For writes (create/edit/move/archive/restore/delete or status changes on knowledge sections and documents, planning projects/milestones/features, tasks and task sections) call propose_changes with full values; the user confirms before anything is written. For facts use search_app or get_current_entity and quote source titles exactly; never invent data. If the request is ambiguous, ask one short clarifying question. Active scope: general."),
+            new("system", "You are the Personal OS assistant. ALWAYS use the provided tools - never answer about user data from memory and never refuse with apologies. Any question or reference about user content ('what do I have about X', 'find', 'where', summaries) requires calling search_app first; exact reading requires get_current_entity. Any request to create, edit, move, archive, restore, delete or change status of a knowledge section/document, planning project/milestone/feature, task or task section requires calling propose_changes with full values. Do not answer until you have called the right tool. Reply in the user's language, briefly. Active scope: general."),
         };
         if (resolvedScope.Mode == "entity")
         {
@@ -191,8 +191,15 @@ public sealed class AgentTurnService(
                 new ModelCompletionRequest(messages, Tools), cancellationToken);
             var completion = lastRoute.Completion;
             if (completion.ToolCalls.Count == 0)
+                {
+                    if (round < 2 && NeedsToolReminder(request.Prompt))
+                    {
+                        messages.Add(new ModelMessage("user", "(Instruction) This request concerns your user's data or a change to it. You MUST call a tool before answering: search_app for any question about data, propose_changes for any create/edit/move/status/delete. Do not answer without a tool result."));
+                        continue;
+                    }
                     return new AgentTurnResult(GroundLookupAnswer(request.Prompt, completion.Content ?? string.Empty, allSources), resolvedScope, lastRoute.RequestedModel,
                     lastRoute.ActualModel, ResolveRoute(request.RequestedRoute, lastRoute), lastRoute.FallbackReason, null, allSources.Distinct().ToArray());
+                }
 
             if (round == MaxToolRounds)
                 return new AgentTurnResult(completion.Content ?? "I could not safely complete the request. Please narrow it and try again.",
@@ -485,6 +492,18 @@ private static string RequiredString(JsonElement root, string name) =>
             ChangeModule.Tasks when type is "task" or "section" => "tasks." + type,
             _ => type
         };
+    }
+
+    private static bool NeedsToolReminder(string prompt)
+    {
+        var text = prompt.ToLowerInvariant();
+        var operationWords = new[] { "создай", "создать", "добавь", "добавить", "измени", "изменить", "переимену", "переименовать",
+            "перенес", "перемести", "перенести", "удали", "удалить", "архив", "отметь", "постав", "статус", "в сегодня", "в бэклог",
+            "верни в план", "create", "add ", "rename", "move", "delete", "archive", "update", "status" };
+        var dataWords = new[] { "у меня", "мои", "моя", "в базе", "база знаний", "в знаниях", "в задач", "документ", "раздел", "проект",
+            "план", "заметк", "что ", "какие", "сколько", "найди", "найти", "где", "напомни", "перечисл", "список", "есть ли", "сводк",
+            "обобщи", "про ", "по ", "my ", "what ", "find ", "list ", "search" };
+        return operationWords.Any(word => text.Contains(word)) || (dataWords.Any(word => text.Contains(word)) && text.Length > 8);
     }
 
     private static string GroundLookupAnswer(string prompt, string modelAnswer, IReadOnlyList<SearchSourceReference> sources)
