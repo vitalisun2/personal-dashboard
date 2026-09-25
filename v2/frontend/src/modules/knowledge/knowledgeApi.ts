@@ -16,6 +16,7 @@ export type KnowledgeNode = {
 export type SearchHit = {
   source: { kind: string; id: string; version: number; url: string; title: string; path: string; snippet: string; updatedAtUtc: string }
   score: number
+  matchKind: 'lexical' | 'semantic'
 }
 
 export type SearchResponse = { hits: SearchHit[]; nextCursor: string | null; isComplete: boolean; coverageNote: string | null }

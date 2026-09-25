@@ -51,6 +51,17 @@ const documentId = computed(() => {
 })
 const document = computed(() => nodes.value.find(node => node.id === documentId.value && node.kind === 'document'))
 const isSearching = computed(() => query.value.trim().length > 0)
+const searchGroups = computed(() => {
+  const lexical = results.value.filter(hit => hit.matchKind === 'lexical')
+  const semantic = results.value.filter(hit => hit.matchKind === 'semantic')
+  const groups = [
+    { kind: 'lexical', title: 'Точные совпадения', symbol: 'Aa', hits: lexical },
+    { kind: 'semantic', title: 'По смыслу', symbol: '≈', hits: semantic },
+  ]
+  const term = query.value.trim()
+  const longQuery = term.split(/\s+/).length >= 4 || term.length > 28
+  return (longQuery ? groups.reverse() : groups).filter(group => group.hits.length > 0)
+})
 
 function childrenOf(parentId: string) { return nodes.value.filter(node => node.parentId === parentId).sort((a, b) => a.position - b.position) }
 function childNodes(parentId: string | null): KnowledgeNode[] { return nodes.value.filter(node => node.parentId === parentId).sort((a, b) => a.position - b.position) }
@@ -123,18 +134,18 @@ async function runSearch() {
       const response = await searchKnowledge(query.value.trim())
       if (revision !== searchRevision) return
       const seen = new Set(response.hits.map(hit => hit.source.id))
-      const supplements = localHits.filter(node => !seen.has(node.id)).map(node => ({ source: { kind: 'knowledge.document', id: node.id, version: node.version, url: `/knowledge/${node.id}`, title: node.title, path: node.path, snippet: node.markdown.slice(0, 180), updatedAtUtc: '' }, score: 0 }))
+      const supplements: SearchHit[] = localHits.filter(node => !seen.has(node.id)).map(node => ({ source: { kind: 'knowledge.document', id: node.id, version: node.version, url: `/knowledge/${node.id}`, title: node.title, path: node.path, snippet: node.markdown.slice(0, 180), updatedAtUtc: '' }, score: 0, matchKind: 'lexical' }))
       localResultIds.value = new Set(supplements.map(hit => hit.source.id))
       results.value = [...response.hits, ...supplements]
     } else {
       localResultIds.value = new Set(localHits.map(node => node.id))
-      results.value = localHits.map(node => ({ source: { kind: 'knowledge.document', id: node.id, version: node.version, url: `/knowledge/${node.id}`, title: node.title, path: node.path, snippet: node.markdown.slice(0, 180), updatedAtUtc: '' }, score: 0 }))
+      results.value = localHits.map(node => ({ source: { kind: 'knowledge.document', id: node.id, version: node.version, url: `/knowledge/${node.id}`, title: node.title, path: node.path, snippet: node.markdown.slice(0, 180), updatedAtUtc: '' }, score: 0, matchKind: 'lexical' }))
     }
   } catch (err) {
     if (revision !== searchRevision) return
     setError(err)
     localResultIds.value = new Set(localHits.map(node => node.id))
-    results.value = localHits.map(node => ({ source: { kind: 'knowledge.document', id: node.id, version: node.version, url: `/knowledge/${node.id}`, title: node.title, path: node.path, snippet: node.markdown.slice(0, 180), updatedAtUtc: '' }, score: 0 }))
+    results.value = localHits.map(node => ({ source: { kind: 'knowledge.document', id: node.id, version: node.version, url: `/knowledge/${node.id}`, title: node.title, path: node.path, snippet: node.markdown.slice(0, 180), updatedAtUtc: '' }, score: 0, matchKind: 'lexical' }))
   }
 }
 watch(() => route.query.q, value => { query.value = String(value || ''); void runSearch() })
@@ -319,9 +330,12 @@ watch(documentId, () => { titleEditing.value = false; markdownEditing.value = fa
       </div>
       <div v-if="isSearching" class="knowledge-results">
         <p v-if="localResultIds.size" class="knowledge-local-search">{{ isOnline ? 'Дополнительные локальные результаты по сохранённым документам.' : 'Локальные результаты: поиск выполнен по сохранённым документам.' }}</p>
-        <button v-for="hit in results" :key="hit.source.id" type="button" class="knowledge-result" :class="{ 'is-local-result': localResultIds.has(hit.source.id) }" @click="openDocument(hit.source.id)">
-          <strong>{{ hit.source.title }}</strong><small>{{ hit.source.path }}</small><span>{{ hit.source.snippet }}</span>
-        </button>
+        <section v-for="group in searchGroups" :key="group.kind" class="knowledge-result-group" :class="`is-${group.kind}`">
+          <div class="knowledge-group-head"><span class="knowledge-group-name"><span class="knowledge-group-kind">{{ group.symbol }}</span>{{ group.title }}</span><span>{{ group.hits.length }}</span></div>
+          <button v-for="hit in group.hits" :key="hit.source.id" type="button" class="knowledge-result" :class="{ 'is-local-result': localResultIds.has(hit.source.id) }" @click="openDocument(hit.source.id)">
+            <strong>{{ hit.source.title }}</strong><small>{{ hit.source.path }}</small><span>{{ hit.source.snippet }}</span>
+          </button>
+        </section>
         <p v-if="!results.length && isOnline" class="knowledge-empty">Ничего не найдено</p>
         <p v-else-if="!results.length" class="knowledge-empty">Нет совпадений в сохранённых документах.</p>
       </div>

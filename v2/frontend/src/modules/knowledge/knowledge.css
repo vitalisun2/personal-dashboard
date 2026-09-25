@@ -38,6 +38,11 @@
 .knowledge-drop-after::after { bottom: 0; }
 .knowledge-drag-ghost { position: fixed; z-index: 1000; pointer-events: none; max-width: min(360px, 75vw); overflow: hidden; padding: 11px 16px; border: 1px solid #7189a3; border-radius: 12px; background: #223142; box-shadow: 0 12px 30px #0008; color: #fff; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .knowledge-results { display: grid; gap: 8px; }
+.knowledge-result-group { display: grid; gap: 8px; margin-bottom: 10px; }
+.knowledge-group-head { display: flex; align-items: center; justify-content: space-between; margin: 1px 2px 0; color: var(--kb-muted); font-size: 12px; }
+.knowledge-group-name { display: flex; align-items: center; gap: 7px; font-weight: 650; }
+.knowledge-group-kind { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 8px; background: #1e2b37; color: #a9bdd5; }
+.knowledge-result-group.is-semantic .knowledge-group-kind { color: #98b7ed; }
 .knowledge-result { display: grid; gap: 5px; padding: 13px 14px; border: 0; border-radius: 14px; background: linear-gradient(90deg, var(--kb-surface), var(--kb-surface-2)); color: inherit; text-align: left; cursor: pointer; }
 .knowledge-result strong { font-size: 15px; font-weight: 680; }
 .knowledge-result small { margin-top: 3px; color: #79a4d7; font-size: 11px; }
