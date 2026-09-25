@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { subscribeSyncStatus, type SyncStatus } from '../offline/runtime'
 
 const route = useRoute()
 const navigation = [
@@ -9,6 +10,17 @@ const navigation = [
   { path: '/tasks', label: 'Задачи', icon: '✓' },
 ]
 const currentSection = computed(() => String(route.path.split('/')[1] || 'knowledge'))
+const syncStatus = ref<SyncStatus>('ready')
+const syncLabel = computed(() => ({
+  ready: 'Синхронизировано',
+  syncing: 'Синхронизация…',
+  offline: 'Офлайн',
+  conflict: 'Есть конфликты',
+  error: 'Ожидает соединения',
+})[syncStatus.value])
+let unsubscribeSyncStatus: (() => void) | undefined
+onMounted(() => { unsubscribeSyncStatus = subscribeSyncStatus(next => { syncStatus.value = next }) })
+onUnmounted(() => unsubscribeSyncStatus?.())
 </script>
 
 <template>
@@ -31,7 +43,7 @@ const currentSection = computed(() => String(route.path.split('/')[1] || 'knowle
         </RouterLink>
       </nav>
       <div class="sidebar-bottom">
-        <span class="sync-indicator"><span></span>Локальные данные</span>
+        <span class="sync-indicator" :class="`sync-${syncStatus}`"><span></span>{{ syncLabel }}</span>
       </div>
     </aside>
 
