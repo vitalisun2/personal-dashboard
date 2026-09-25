@@ -70,7 +70,13 @@ public sealed record SearchSourceReference(
     bool IsChatHistory,
     SearchChatContext? ChatContext);
 
-public sealed record SearchHit(SearchSourceReference Source, double Score);
+public enum SearchMatchKind
+{
+    Lexical,
+    Semantic
+}
+
+public sealed record SearchHit(SearchSourceReference Source, double Score, SearchMatchKind MatchKind);
 
 public sealed record SearchResponse(
     IReadOnlyList<SearchHit> Hits,
