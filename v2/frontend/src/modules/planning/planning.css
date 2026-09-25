@@ -1,0 +1,45 @@
+.planning-page { color: #202538; }
+.planning-heading, .planning-toolbar, .list-heading, .planning-row, .progress-card > div:first-child { display: flex; align-items: center; gap: 12px; }
+.planning-heading { justify-content: space-between; margin-bottom: 21px; }
+.planning-heading .eyebrow, .feature-heading .eyebrow { margin: 0 0 6px; color: #80879a; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+.planning-heading h1 { margin: 0; }
+.planning-primary, .planning-quiet { border: 1px solid #e0e4ed; border-radius: 10px; padding: 9px 12px; background: #fff; color: #49516a; font-size: 13px; font-weight: 650; cursor: pointer; }
+.planning-primary { color: #fff; border-color: var(--accent); background: var(--accent); }
+.planning-toolbar { flex-wrap: wrap; margin: 15px 0 19px; padding: 13px; border: 1px solid #e8eaf0; border-radius: 13px; background: #fff; }
+.project-picker { display: grid; flex: 1; min-width: 210px; gap: 5px; }
+.project-picker label, .feature-status-control { color: #737b8e; font-size: 12px; font-weight: 650; }
+.project-picker select, .feature-status-control select { min-height: 38px; border: 1px solid #dfe3eb; border-radius: 9px; padding: 7px 10px; background: #fff; font: inherit; }
+.planning-editor { display: grid; gap: 12px; margin: 15px 0; padding: 17px; border: 1px solid #dfe4f3; border-radius: 14px; background: #fff; }
+.planning-editor label { display: grid; gap: 6px; color: #737b8e; font-size: 12px; font-weight: 650; }
+.planning-editor input, .planning-editor textarea { width: 100%; border: 1px solid #dfe3eb; border-radius: 9px; padding: 10px; font: inherit; }
+.planning-editor > div { display: flex; justify-content: flex-end; gap: 8px; }
+.progress-card { margin: 18px 0 23px; padding: 18px; border: 1px solid #e8eaf0; border-radius: 15px; background: #fff; }
+.progress-card > div:first-child { justify-content: space-between; margin-bottom: 12px; color: #737b8e; font-size: 13px; }
+.progress-card strong { color: #282e40; font-size: 20px; }
+.progress-track { height: 8px; overflow: hidden; border-radius: 9px; background: #edf0f5; }
+.progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7086e6, #4967d8); }
+.progress-card small { display: block; margin-top: 8px; color: #80879a; }
+.list-heading { flex-wrap: wrap; margin: 20px 0 9px; }
+.list-heading h2 { flex: 1; margin: 0; font-size: 16px; }
+.planning-row { position: relative; min-height: 58px; margin: 7px 0; padding: 9px 12px; border: 1px solid #e8eaf0; border-radius: 12px; background: #fff; }
+.planning-row[role], .planning-row { cursor: pointer; }
+.row-open { flex: 1; min-width: 0; overflow: hidden; border: 0; padding: 7px 0; background: transparent; color: #292f42; text-align: left; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; cursor: pointer; }
+.row-progress { display: grid; width: 140px; gap: 5px; color: #747c8d; font-size: 11px; text-align: right; }
+.row-progress .progress-track { height: 5px; }
+.row-arrow { color: #a0a6b4; font-size: 22px; }
+.feature-status, .task-placement { padding: 5px 8px; border-radius: 20px; color: #7a8294; background: #f2f3f6; font-size: 11px; }
+.feature-status.active { color: #4565ce; background: #eef1ff; }
+.feature-status.done { color: #27835e; background: #eaf7f0; }
+.feature-status-control { display: flex; align-items: center; gap: 12px; margin: 14px 0 22px; }
+.feature-heading { align-items: flex-end; }
+.feature-heading > div { flex: 1; }
+.feature-heading h2 { margin: 0; font-size: 23px; }
+.planning-back { margin: 3px 0 8px; border: 0; padding: 7px 0; color: var(--accent); background: transparent; font: inherit; cursor: pointer; }
+.planning-empty { display: grid; min-height: 130px; place-items: center; border: 1px dashed #dfe3eb; border-radius: 14px; color: #83899a; background: #fff; }
+.planning-error { margin: 12px 0; padding: 11px 13px; border-radius: 10px; color: #9d3d3d; background: #fff0ef; }
+.planning-error button { float: right; border: 0; background: transparent; cursor: pointer; }
+.task-plan-row { cursor: default; }
+.planning-drag-handle { cursor: grab; touch-action: none; }
+.planning-drag-handle:active { cursor: grabbing; }
+.planning-context-actions { position: absolute; right: 6px; bottom: calc(100% + 5px); z-index: 8; display: flex; flex-wrap: wrap; gap: 7px; width: max-content; max-width: min(95vw, 420px); border: 1px solid #e1e5ed; border-radius: 12px; padding: 8px; background: #fff; box-shadow: 0 8px 24px #20253824; }
+@media (max-width: 700px) { .planning-row { flex-wrap: wrap; } .planning-row .row-open { flex-basis: 100%; } .row-progress { flex: 1; } .feature-heading { align-items: flex-start; } }
