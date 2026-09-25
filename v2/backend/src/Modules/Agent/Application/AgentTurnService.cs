@@ -61,7 +61,7 @@ public sealed class AgentTurnService(
         var resolvedScope = await ResolveScopeAsync(request.Scope, cancellationToken);
         var messages = new List<ModelMessage>
         {
-            new("system", "You are the Personal OS assistant. Answer general topics normally. For application facts, use search_app and get_current_entity; cite returned sources. Search history is historical discussion, never current state. If search says coverage is incomplete or notes limits, say the results are partial and do not claim you found everything. Never claim a write happened. For edits, call propose_changes with exact IDs, expected versions, and complete new values; the server will show one preview per object and wait for explicit confirmation. If unsure which object or value the user means, ask a question instead. The active scope is " + FormatScope(resolvedScope) + "."),
+            new("system", "You are the Personal OS assistant. Answer general topics normally. For application facts, use search_app and get_current_entity; cite returned sources. Copy source titles and snippets exactly; never invent them. Search history is historical discussion, never current state. If search says coverage is incomplete or notes limits, say the results are partial and do not claim you found everything. Never claim a write happened. For edits, call propose_changes with exact IDs, expected versions, complete new values, and fully qualified entity types such as knowledge.document; for a focused entity use its exact scope type and ID. The server will show one preview per object and wait for explicit confirmation. If unsure which object or value the user means, ask a question instead. The active scope is " + FormatScope(resolvedScope) + "."),
         };
         if (resolvedScope.Mode == "entity")
         {
@@ -80,7 +80,7 @@ public sealed class AgentTurnService(
                 new ModelCompletionRequest(messages, Tools), cancellationToken);
             var completion = lastRoute.Completion;
             if (completion.ToolCalls.Count == 0)
-                    return new AgentTurnResult(completion.Content ?? string.Empty, resolvedScope, lastRoute.RequestedModel,
+                    return new AgentTurnResult(GroundLookupAnswer(request.Prompt, completion.Content ?? string.Empty, allSources), resolvedScope, lastRoute.RequestedModel,
                     lastRoute.ActualModel, ResolveRoute(request.RequestedRoute, lastRoute), lastRoute.FallbackReason, null, allSources.Distinct().ToArray());
 
             if (round == MaxToolRounds)
@@ -92,9 +92,18 @@ public sealed class AgentTurnService(
             {
                 if (call.Name == "propose_changes")
                 {
-                    var proposal = await PrepareProposalAsync(call.ArgumentsJson, request, cancellationToken);
-                    return new AgentTurnResult(completion.Content ?? "I prepared a change proposal for your review.", resolvedScope,
-                        lastRoute.RequestedModel, lastRoute.ActualModel, ResolveRoute(request.RequestedRoute, lastRoute), lastRoute.FallbackReason, proposal, allSources.Distinct().ToArray());
+                    try
+                    {
+                        var proposal = await PrepareProposalAsync(call.ArgumentsJson, request, cancellationToken);
+                        return new AgentTurnResult(completion.Content ?? "I prepared a change proposal for your review.", resolvedScope,
+                            lastRoute.RequestedModel, lastRoute.ActualModel, ResolveRoute(request.RequestedRoute, lastRoute), lastRoute.FallbackReason, proposal, allSources.Distinct().ToArray());
+                    }
+                    catch (Exception error) when (error is InvalidDataException or ArgumentException or FormatException or KeyNotFoundException or InvalidOperationException or JsonException)
+                    {
+                        messages.Add(new ModelMessage("tool", "Proposal rejected: " + error.Message +
+                            " Use exact entity types knowledge.document, knowledge.section, planning.project, planning.milestone, planning.feature, tasks.task, or tasks.section. No data was changed. Correct the proposal or ask for clarification.", ToolCallId: call.Id, Name: call.Name));
+                        continue;
+                    }
                 }
 
                 var output = call.Name switch
@@ -183,7 +192,7 @@ public sealed class AgentTurnService(
         {
             var module = Enum.Parse<ChangeModule>(RequiredString(item, "module"), ignoreCase: true);
             var operation = Enum.Parse<ChangeOperation>(RequiredString(item, "operation"), ignoreCase: true);
-            var entityType = RequiredString(item, "entityType");
+            var entityType = NormalizeEntityType(module, RequiredString(item, "entityType"));
             var id = Guid.Parse(RequiredString(item, "entityId"));
             var expectedVersion = item.TryGetProperty("expectedVersion", out var version) ? version.GetInt64() : (long?)null;
             ValidateChangeShape(module, operation, entityType, expectedVersion);
@@ -216,6 +225,35 @@ public sealed class AgentTurnService(
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString())
             ? value.GetString()!
             : throw new InvalidDataException($"'{name}' is required.");
+
+    private static string NormalizeEntityType(ChangeModule module, string value)
+    {
+        var type = value.Trim().ToLowerInvariant();
+        if (type.Contains('.')) return type;
+        return module switch
+        {
+            ChangeModule.Knowledge when type is "document" or "section" => "knowledge." + type,
+            ChangeModule.Planning when type is "project" or "milestone" or "feature" => "planning." + type,
+            ChangeModule.Tasks when type is "task" or "section" => "tasks." + type,
+            _ => type
+        };
+    }
+
+    private static string GroundLookupAnswer(string prompt, string modelAnswer, IReadOnlyList<SearchSourceReference> sources)
+    {
+        if (sources.Count == 0) return modelAnswer;
+        var question = prompt.ToLowerInvariant();
+        if (!(question.Contains("где") || question.Contains("найди") || question.Contains("перечисли") ||
+              question.Contains("в каких") || question.Contains("упоминается") || question.Contains("find ") ||
+              question.Contains("list "))) return modelAnswer;
+        var current = sources.Where(source => !source.IsChatHistory)
+            .DistinctBy(source => (source.Kind, source.Id, source.Version));
+        if (question.Contains("документ")) current = current.Where(source => source.Kind == "knowledge.document");
+        var items = current.ToArray();
+        if (items.Length == 0) return modelAnswer;
+        return "Найденные записи в текущих данных:\n" + string.Join("\n", items.Select((source, index) =>
+            $"{index + 1}. {source.Title} — {source.Snippet}"));
+    }
 
     private async Task<AgentScope> ResolveScopeAsync(AgentScope scope, CancellationToken cancellationToken)
     {

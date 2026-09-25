@@ -100,6 +100,7 @@ public static class ChatApiModule
         fallbackReason = turn.FallbackReason,
         createdAt = turn.CreatedAtUtc,
         sourceReferences = turn.Sources.Select(source => source.Url ?? source.Path ?? $"{source.Kind}:{source.Id}"),
+        sourceDetails = turn.Sources.Select(source => new { title = source.Title, url = source.Url, snippet = source.Snippet }),
         proposalId = proposal?.Id,
         proposalStatus = proposal?.State.ToString(),
         changes = proposal?.Actions.Select(action =>

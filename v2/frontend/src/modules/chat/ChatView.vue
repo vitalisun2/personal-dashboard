@@ -265,8 +265,10 @@ onBeforeUnmount(() => {
               <dt>Изменяемые значения</dt><dd><pre>{{ JSON.stringify(change.after, null, 2) }}</pre></dd></dl>
           </details>
         </article>
-        <div v-if="turn.sourceReferences?.length" class="source-list">
-          <span>Источники:</span><a v-for="source in turn.sourceReferences" :key="source" :href="source">{{ source }}</a>
+        <div v-if="turn.sourceDetails?.length || turn.sourceReferences?.length" class="source-list">
+          <span>Источники:</span>
+          <a v-for="source in turn.sourceDetails ?? []" :key="source.url ?? source.title" :href="source.url ?? '#'" :title="source.snippet">{{ source.title }}</a>
+          <a v-if="!turn.sourceDetails?.length" v-for="source in turn.sourceReferences" :key="source" :href="source">{{ source }}</a>
         </div>
         <div v-if="turn.fallbackReason" class="route-note">Автоматический переход: {{ turn.fallbackReason }}</div>
         <div v-if="turn.proposalId && turn.changes?.length" class="proposal-actions">

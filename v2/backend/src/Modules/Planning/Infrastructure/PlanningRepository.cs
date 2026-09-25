@@ -27,10 +27,30 @@ public sealed class PlanningRepository(PlatformDbContext db, ITransactionRunner 
         var entry = db.Entry(project);
         if (entry.State == EntityState.Detached) db.Add(project);
         db.ChangeTracker.DetectChanges();
+        // A child with a client-generated Guid can be discovered as Modified when it
+        // is added to an already tracked project. Confirm which children exist in
+        // PostgreSQL before the journal's SaveChanges turns that into an UPDATE.
+        await MarkNewChildrenAddedAsync(token);
         var snapshots = CollectSnapshots(project, deleted ?? []);
         await PersistTombstonesAsync(snapshots.Where(x => x.Deleted), token);
         foreach (var snapshot in snapshots) await journal.AppendAsync(snapshot, token);
     }, ct);
+
+    private async Task MarkNewChildrenAddedAsync(CancellationToken ct)
+    {
+        var candidates = db.ChangeTracker.Entries<OrderedEntity>()
+            .Where(entry => entry.State == EntityState.Modified && entry.Entity.Version == 1)
+            .ToArray();
+        if (candidates.Length == 0) return;
+
+        var ids = candidates.Select(entry => entry.Entity.Id).ToArray();
+        var persisted = (await db.Set<OrderedEntity>().AsNoTracking()
+            .Where(item => ids.Contains(item.Id))
+            .Select(item => item.Id)
+            .ToListAsync(ct)).ToHashSet();
+        foreach (var child in candidates)
+            if (!persisted.Contains(child.Entity.Id)) child.State = EntityState.Added;
+    }
 
     public async Task DeleteProjectAsync(Guid id, CancellationToken ct)
     {

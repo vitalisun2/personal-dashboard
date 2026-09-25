@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
@@ -32,13 +33,13 @@ public static class TasksApiModule
         group.MapPut("/{id:guid}/status", (Guid id, StatusInput input, TasksService service, CancellationToken ct) => service.SetStatusAsync(id, input.ExpectedVersion, input.Status, ct));
         group.MapPost("/{id:guid}/archive", (Guid id, VersionInput input, TasksService service, CancellationToken ct) => service.ArchiveAsync(id, input.ExpectedVersion, ct));
         group.MapPost("/{id:guid}/restore", (Guid id, VersionInput input, TasksService service, CancellationToken ct) => service.RestoreAsync(id, input.ExpectedVersion, null, ct));
-        group.MapDelete("/{id:guid}", async (Guid id, VersionInput input, TasksService service, CancellationToken ct) => { await service.DeleteAsync(id, input.ExpectedVersion, ct); return Results.NoContent(); });
+        group.MapDelete("/{id:guid}", async (Guid id, [FromBody] VersionInput input, TasksService service, CancellationToken ct) => { await service.DeleteAsync(id, input.ExpectedVersion, ct); return Results.NoContent(); });
         group.MapPut("/order", (TaskOrderInput input, TasksService service, CancellationToken ct) => service.ReorderTasksAsync(input.Location, input.SectionId, input.Items, ct, input.ProjectId, input.MilestoneId, input.FeatureId));
         group.MapGet("/sections", (TaskLocation location, TasksService service, CancellationToken ct) => service.SectionsAsync(location, ct));
         group.MapPost("/sections", (TaskSectionCreate input, TasksService service, CancellationToken ct) => service.CreateSectionAsync(input.Name, input.Location, ct));
         group.MapPut("/sections/{id:guid}", (Guid id, TaskSectionEditInput input, TasksService service, CancellationToken ct) => service.RenameSectionAsync(id, input.ExpectedVersion, input.Name, ct));
         group.MapPut("/sections/order", (TaskSectionOrderInput input, TasksService service, CancellationToken ct) => service.ReorderSectionsAsync(input.Location, input.ExpectedVersion, input.Ids, ct));
-        group.MapDelete("/sections/{id:guid}", async (Guid id, VersionInput input, TasksService service, CancellationToken ct) => { await service.DeleteSectionAsync(id, input.ExpectedVersion, ct); return Results.NoContent(); });
+        group.MapDelete("/sections/{id:guid}", async (Guid id, [FromBody] VersionInput input, TasksService service, CancellationToken ct) => { await service.DeleteSectionAsync(id, input.ExpectedVersion, ct); return Results.NoContent(); });
         return endpoints;
     }
 

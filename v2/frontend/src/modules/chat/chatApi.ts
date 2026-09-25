@@ -32,6 +32,7 @@ export interface ChatTurn {
   modelRoute?: 'Default' | 'ManualSelection' | 'AutomaticFallback'
   createdAt: string
   sourceReferences: string[]
+  sourceDetails?: { title: string; url: string | null; snippet: string }[]
   proposalId?: string | null
   proposalStatus?: 'Pending' | 'Applied' | 'Dismissed' | null
   changes?: ChatProposedChange[]

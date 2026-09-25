@@ -13,7 +13,7 @@ V2 is a separate application under `v2/`. The repository root solution, Compose 
   dotnet tool run dotnet-ef -- migrations add ModulesInitial --project backend/src/Host/PersonalDashboard.V2.Host.csproj --startup-project backend/src/Host/PersonalDashboard.V2.Host.csproj --context PlatformDbContext --output-dir Migrations --no-build
   ```
 
-  `PlatformDbContextFactory` loads each module Infrastructure assembly for EF model discovery; migration generation does not need a live database. Review the generated migration before deployment, including Search's `vector` and `pg_trgm` extension/index SQL. Host applies committed migrations on startup.
+  `PlatformDbContextFactory` loads each module Infrastructure assembly for EF model discovery; migration generation does not need a live database. Review the generated migration before deployment. Host applies committed migrations on startup. Search initializes its derived tables, `vector` and `pg_trgm` extensions, and indexes separately on startup; its index can be rebuilt from module data.
 - PostgreSQL connection string: `ConnectionStrings:PersonalOsV2`.
 
 The Host calls `Add{Name}Infrastructure(IServiceCollection, IConfiguration)` and `Map{Name}Api(IEndpointRouteBuilder)` for each of Knowledge, Planning, Tasks, Chat, Agent, and Search. Modules keep their EF `IEntityTypeConfiguration<>` and repositories in their own Infrastructure projects. `PlatformDbContext` discovers those configurations from loaded module Infrastructure assemblies; only the owning module changes its tables. Agent batches use `ITransactionRunner` and module Application contracts so all confirmed actions share one database transaction.
