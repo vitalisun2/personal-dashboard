@@ -188,7 +188,7 @@ public sealed class V1SyncOutbox(IConfiguration configuration, IHttpClientFactor
         if (string.IsNullOrWhiteSpace(name) || bucket is not ("backlog" or "today")) return false;
 
         var client = CreateClient();
-        using var response = await client.GetAsync($"/api/v2/tasks/sections?location={Uri.EscapeDataString(bucket)}", ct);
+        using var response = await client.GetAsync($"/api/v2/tasks/sections?location={QueryLocation(bucket)}", ct);
         response.EnsureSuccessStatusCode();
         var sections = await response.Content.ReadFromJsonAsync<List<RemoteSection>>(_json, ct) ?? [];
         var match = sections.FirstOrDefault(section => NormalizeSection(section.Name) == NormalizeSection(name)
@@ -266,7 +266,7 @@ public sealed class V1SyncOutbox(IConfiguration configuration, IHttpClientFactor
         var name = payload.TryGetProperty("title", out var title) ? title.GetString() ?? "" : "";
         var bucket = payload.TryGetProperty("bucket", out var location) ? location.GetString() ?? "" : "";
         var client = CreateClient();
-        using var response = await client.GetAsync($"/api/v2/tasks/sections?location={Uri.EscapeDataString(bucket)}", ct);
+        using var response = await client.GetAsync($"/api/v2/tasks/sections?location={QueryLocation(bucket)}", ct);
         response.EnsureSuccessStatusCode();
         var sections = await response.Content.ReadFromJsonAsync<List<RemoteSection>>(_json, ct) ?? [];
         return sections.FirstOrDefault(section => NormalizeSection(section.Name) == NormalizeSection(name)
@@ -331,6 +331,7 @@ public sealed class V1SyncOutbox(IConfiguration configuration, IHttpClientFactor
         && string.Equals(value.GetString(), "create", StringComparison.OrdinalIgnoreCase);
 
     private static string SectionKey(string name, string bucket) => bucket + ":" + NormalizeSection(name);
+    private static string QueryLocation(string bucket) => bucket == "today" ? "Today" : "Backlog";
     private static string NormalizeSection(string name) => name.Trim().Normalize(NormalizationForm.FormKC).ToUpperInvariant();
     private static Guid StableGuid(string value)
     {

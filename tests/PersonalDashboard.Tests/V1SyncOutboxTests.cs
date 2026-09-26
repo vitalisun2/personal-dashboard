@@ -213,7 +213,7 @@ public sealed class V1SyncOutboxTests
                 return Json(HttpStatusCode.OK, "{\"epoch\":\"test-epoch\"}");
             if (request.RequestUri.AbsolutePath == "/api/v2/tasks/sections")
             {
-                var location = request.RequestUri.Query.Split('=', 2).Last();
+                var location = request.RequestUri.Query.Split('=', 2).Last().ToLowerInvariant();
                 SectionLookups.Add(location);
                 using var configured = JsonDocument.Parse(Sections?.Invoke(location) ?? "[]");
                 var all = configured.RootElement.EnumerateArray().Select(item => new RemoteSectionStub(
