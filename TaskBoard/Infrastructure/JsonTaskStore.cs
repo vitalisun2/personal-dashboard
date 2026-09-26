@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using TaskBoard.Application;
 using TaskBoard.Domain;
+using TaskStatus = TaskBoard.Domain.TaskStatus;
 
 namespace TaskBoard.Infrastructure;
 
@@ -17,6 +18,7 @@ public sealed class TaskStore : ITaskRepository
 {
     private const int ArchiveRetentionDays = 30;
     private readonly string _path;
+    private readonly ITaskSyncOutbox? _syncOutbox;
     private readonly bool _protectionEnabled;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web)
@@ -25,14 +27,16 @@ public sealed class TaskStore : ITaskRepository
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) }
     };
 
-    public TaskStore(IWebHostEnvironment environment)
+    public TaskStore(IWebHostEnvironment environment, ITaskSyncOutbox? syncOutbox = null)
     {
         var configured = Environment.GetEnvironmentVariable("TASKS_FILE");
         _path = string.IsNullOrWhiteSpace(configured) ? Path.Combine(environment.ContentRootPath, "tasks.json") : configured;
         _protectionEnabled = string.Equals(Environment.GetEnvironmentVariable("TASKS_PROTECTION_ENABLED"), "true", StringComparison.OrdinalIgnoreCase);
+        _syncOutbox = syncOutbox;
     }
 
-    public TaskStore(string path) => _path = path;
+    public TaskStore(string path, ITaskSyncOutbox? syncOutbox = null)
+    { _path = path; _syncOutbox = syncOutbox; }
     internal TaskStore(string path, bool protectionEnabled) { _path = path; _protectionEnabled = protectionEnabled; }
 
     public async Task<IReadOnlyList<TaskItem>> GetAllAsync(CancellationToken cancellationToken = default)
@@ -170,8 +174,28 @@ public sealed class TaskStore : ITaskRepository
         finally { _gate.Release(); }
     }
 
-    public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
-    { await _gate.WaitAsync(cancellationToken); try { await WriteUnsafeAsync((await ReadUnsafeAsync(cancellationToken)).Where(x => x.Id != id).ToList(), cancellationToken); } finally { _gate.Release(); } }
+    public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default, bool publishSync = true)
+    { await _gate.WaitAsync(cancellationToken); try { await WriteUnsafeAsync((await ReadUnsafeAsync(cancellationToken)).Where(x => x.Id != id).ToList(), cancellationToken, publishSync); } finally { _gate.Release(); } }
+
+    public async Task ImportAsync(TaskItem item, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var items = await ReadUnsafeAsync(cancellationToken);
+            var index = items.FindIndex(existing => existing.Id == item.Id);
+            if (index < 0) items.Insert(0, item with { PreviousVersion = null, ShowingAlternate = false });
+            else
+            {
+                var current = items[index];
+                var imported = item with { CreatedAt = current.CreatedAt, PreviousVersion = current.PreviousVersion, ShowingAlternate = current.ShowingAlternate };
+                if ((current with { PreviousVersion = null, ShowingAlternate = false }) == (imported with { PreviousVersion = null, ShowingAlternate = false })) return;
+                items[index] = imported;
+            }
+            await WriteUnsafeAsync(items, cancellationToken, publishSync: false);
+        }
+        finally { _gate.Release(); }
+    }
 
     public async Task<int> RenameSectionAsync(string oldName, string newName, CancellationToken cancellationToken = default)
     {
@@ -263,13 +287,44 @@ public sealed class TaskStore : ITaskRepository
         return items.Select(item => item with { Section = string.IsNullOrWhiteSpace(item.Section) ? "Общее" : item.Section }).ToList();
     }
 
-    private async Task WriteUnsafeAsync(List<TaskItem> items, CancellationToken ct)
+    private async Task WriteUnsafeAsync(List<TaskItem> items, CancellationToken ct, bool publishSync = true)
     {
+        var previous = publishSync && _syncOutbox is not null ? await ReadUnsafeAsync(ct) : null;
         var temp = _path + ".tmp";
         await using (var stream = File.Create(temp)) await JsonSerializer.SerializeAsync(stream, items, _json, ct);
         if (_protectionEnabled && File.Exists(_path)) File.Replace(temp, _path, BackupPath(), ignoreMetadataErrors: true); else File.Move(temp, _path, true);
+        if (previous is not null) await EnqueueChangesAsync(previous, items, ct);
         if (_protectionEnabled) await ArchiveCurrentAsync(ct);
     }
+
+    private async Task EnqueueChangesAsync(IReadOnlyList<TaskItem> previous, IReadOnlyList<TaskItem> current, CancellationToken ct)
+    {
+        var before = previous.ToDictionary(item => item.Id);
+        var after = current.ToDictionary(item => item.Id);
+        foreach (var removed in before.Keys.Except(after.Keys))
+            await _syncOutbox!.EnqueueAsync("tasks.task", removed, "delete", null, ct);
+
+        foreach (var item in current)
+        {
+            if (before.TryGetValue(item.Id, out var old) && CompatibleTaskStateEquals(old, item)) continue;
+            var payload = JsonSerializer.SerializeToElement(new
+            {
+                operation = before.ContainsKey(item.Id) ? "update" : "create",
+                kind = "task",
+                id = item.Id,
+                title = item.Title,
+                description = item.Description,
+                placement = item.Bucket == TaskBucket.Today ? "today" : "backlog",
+                workStatus = item.Status switch { TaskStatus.InProgress => "inProgress", TaskStatus.Completed => "done", _ => "new" }
+            });
+            var bucket = item.Bucket == TaskBucket.Today ? "today" : "backlog";
+            await _syncOutbox!.EnqueueTaskAsync(item.Section, bucket, item.Id, payload, ct);
+        }
+    }
+
+    private static bool CompatibleTaskStateEquals(TaskItem left, TaskItem right) =>
+        left.Title == right.Title && left.Description == right.Description && left.Bucket == right.Bucket &&
+        left.Status == right.Status && left.Section == right.Section && left.CreatedAt == right.CreatedAt;
 
     private string BackupPath() => _path + ".bak";
     private async Task ArchiveCurrentAsync(CancellationToken ct)

@@ -18,6 +18,17 @@ public static class KnowledgeApiExtensions
 
     public static IEndpointRouteBuilder MapKnowledgeBaseApi(this IEndpointRouteBuilder app)
     {
+        app.MapPost("/api/sync/v2/knowledge", async (KnowledgePeerImport input, KnowledgeService service, CancellationToken ct) =>
+        {
+            if (input.Id == Guid.Empty || string.IsNullOrWhiteSpace(input.Kind) || string.IsNullOrWhiteSpace(input.Title)) return Results.BadRequest();
+            var imported = await service.ImportSyncNodeAsync(new KnowledgeNodeDto(input.Id, input.Kind, input.Title, input.ParentId, input.Position, input.CreatedAt ?? DateTimeOffset.UtcNow, input.UpdatedAt ?? DateTimeOffset.UtcNow), input.Markdown, false, ct);
+            return imported ? Results.NoContent() : Results.Conflict(new { message = "Knowledge parent or payload is incompatible." });
+        });
+        app.MapDelete("/api/sync/v2/knowledge/{id:guid}", async (Guid id, KnowledgeService service, CancellationToken ct) =>
+        {
+            await service.ImportSyncNodeAsync(new KnowledgeNodeDto(id, "section", "", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), null, true, ct);
+            return Results.NoContent();
+        });
         app.MapGet("/api/knowledge/tree", async (KnowledgeService service, CancellationToken ct) => Results.Ok(await service.GetTreeAsync(ct)));
         app.MapGet("/api/knowledge/documents/{id:guid}", async (Guid id, KnowledgeService service, CancellationToken ct) => (await service.GetDocumentAsync(id, ct)) is { } doc ? Results.Ok(doc) : Results.NotFound(new { message = "Документ не найден." }));
         app.MapPost("/api/knowledge/sections", async (CreateSectionRequest request, KnowledgeService service, CancellationToken ct) => { var result = await service.CreateAsync("section", request.Title, null, request.ParentId, ct); return result.Node is null ? Results.BadRequest(new { message = result.Error }) : Results.Created($"/api/knowledge/nodes/{result.Node.Id}", result.Node); });
@@ -30,3 +41,5 @@ public static class KnowledgeApiExtensions
         return app;
     }
 }
+
+public sealed record KnowledgePeerImport(Guid Id, string Kind, string Title, Guid? ParentId, int Position, string? Markdown, DateTimeOffset? CreatedAt, DateTimeOffset? UpdatedAt);

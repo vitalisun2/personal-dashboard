@@ -1,6 +1,0 @@
-/* Tasks module — only styles NOT covered by shared/phone-shell styles (v2/mockup parity).
-   All .task-* layout/visuals live in shared/styles.css under .phone-shell; here we add
-   module-specific bits: [hidden] handling for buttons, error banner. */
-.phone-shell [hidden] { display: none !important }
-.phone-shell .tasks-section .task-error { margin: 12px 0; padding: 11px 14px; border-radius: 10px; background: #382327; color: #e6a3aa; font-size: 13px; flex: none }
-.phone-shell .tasks-section .task-error button { float: right; border: 0; background: transparent; color: inherit }

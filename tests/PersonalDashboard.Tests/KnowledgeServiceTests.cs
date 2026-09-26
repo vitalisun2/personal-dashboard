@@ -25,6 +25,31 @@ public sealed class KnowledgeServiceTests
     }
 
     [TestMethod]
+    public async Task PeerImportPreservesIdsAndDeletesSubtreesIdempotently()
+    {
+        var parentId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        var parent = new KnowledgeNodeDto(parentId, "section", "Imported", null, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
+        var child = new KnowledgeNodeDto(childId, "document", "Document", parentId, 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
+        var store = new InMemoryKnowledgeStore(new KnowledgeDocument());
+        var outbox = new RecordingKnowledgeSyncOutbox();
+        var service = new KnowledgeService(store, outbox);
+
+        Assert.IsFalse(await service.ImportSyncNodeAsync(child, "markdown", false, CancellationToken.None), "An absent parent must reject the import without writing a partial node.");
+        Assert.AreEqual(0, store.Value.Nodes.Count);
+        Assert.AreEqual(0, outbox.Operations.Count, "Rejected or peer-originated imports must not enqueue outbound echo.");
+        Assert.IsTrue(await service.ImportSyncNodeAsync(parent, null, false, CancellationToken.None));
+        Assert.IsTrue(await service.ImportSyncNodeAsync(child, "markdown", false, CancellationToken.None));
+        Assert.IsTrue(await service.ImportSyncNodeAsync(child, "markdown", false, CancellationToken.None));
+        Assert.AreEqual(2, store.Value.Nodes.Count);
+        Assert.AreEqual(childId, store.Value.Nodes.Single(node => node.Title == "Document").Id);
+        Assert.IsTrue(await service.ImportSyncNodeAsync(parent, null, true, CancellationToken.None));
+        Assert.IsTrue(await service.ImportSyncNodeAsync(parent, null, true, CancellationToken.None));
+        Assert.AreEqual(0, store.Value.Nodes.Count);
+        Assert.AreEqual(0, outbox.Operations.Count, "Peer-originated creates, updates and deletes must not echo.");
+    }
+
+    [TestMethod]
     public async Task UntitledDocumentSkipsExistingNameFromOlderData()
     {
         var first = new KnowledgeNode { Kind = "document", Title = "Doc 1" };
@@ -89,6 +114,17 @@ public sealed class KnowledgeServiceTests
         public Task WriteAsync(KnowledgeDocument document, CancellationToken cancellationToken)
         {
             Value = document;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingKnowledgeSyncOutbox : IKnowledgeSyncOutbox
+    {
+        public List<string> Operations { get; } = [];
+
+        public Task EnqueueAsync(string type, Guid id, string operation, System.Text.Json.JsonElement? payload, CancellationToken cancellationToken)
+        {
+            Operations.Add($"{type}:{id}:{operation}");
             return Task.CompletedTask;
         }
     }

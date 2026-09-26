@@ -17,6 +17,8 @@ services:
       TASKS_FILE: /data/tasks.json
       # Не даёт приложению принять пропавший production-файл за пустой список задач.
       TASKS_PROTECTION_ENABLED: "true"
+      V1_V2_SYNC_KEY: ${V1_V2_SYNC_KEY:-}
+      V2_PEER_URL: ${V2_PEER_URL:-http://host.docker.internal:8090}
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct-2507-q4_K_M}
       OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-gemma4:e4b-it-qat}

@@ -1,6 +1,0 @@
-/* Planning page — module-specific styles only.
-   The mockup .planning-* theme (toolbar, picker, rows, detail, sheet, order mode,
-   context menu, confirm layer) lives in shared/styles.css under .phone-shell. */
-.planning-section.planning-page { position: static; }
-.planning-error { display: flex; align-items: center; gap: 10px; margin: 12px 0 4px; padding: 11px 13px; border-radius: 10px; background: #382327; color: #e6a3aa; font-size: 13px; line-height: 1.45 }
-.planning-error button { flex: none; margin-left: auto; padding: 2px 6px; border: 0; background: transparent; color: inherit; font-size: 15px; line-height: 1; cursor: pointer }

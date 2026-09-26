@@ -23,9 +23,61 @@ public interface IKnowledgeStore
     Task WriteAsync(KnowledgeDocument document, CancellationToken cancellationToken);
 }
 
-public sealed class KnowledgeService(IKnowledgeStore store)
+public sealed class KnowledgeService(IKnowledgeStore store, IKnowledgeSyncOutbox? syncOutbox = null)
 {
     private readonly SemaphoreSlim mutationGate = new(1, 1);
+
+    public async Task<bool> ImportSyncNodeAsync(KnowledgeNodeDto node, string? content, bool deleted, CancellationToken ct)
+    {
+        await mutationGate.WaitAsync(ct);
+        try
+        {
+            var data = await store.ReadAsync(ct);
+            if (deleted)
+            {
+                var ids = new HashSet<Guid> { node.Id };
+                var changed = true;
+                while (changed)
+                {
+                    changed = false;
+                    foreach (var child in data.Nodes.Where(candidate => candidate.ParentId is not null && ids.Contains(candidate.ParentId.Value)))
+                        if (ids.Add(child.Id)) changed = true;
+                }
+                var removed = data.Nodes.RemoveAll(candidate => ids.Contains(candidate.Id));
+                if (removed == 0) return true;
+            }
+            else
+            {
+                if (node.Kind is not ("section" or "document") || string.IsNullOrWhiteSpace(node.Title) || node.Order < 0)
+                    return false;
+                if (node.ParentId is { } parent && !data.Nodes.Any(candidate => candidate.Id == parent && candidate.IsSection)) return false;
+                if (node.Kind == "section" && !string.IsNullOrEmpty(content)) return false;
+                var imported = new KnowledgeNode
+                {
+                    Id = node.Id, Kind = node.Kind, Title = node.Title, ParentId = node.ParentId,
+                    Order = node.Order, Content = node.Kind == "document" ? content ?? "" : null,
+                    CreatedAt = node.CreatedAt, UpdatedAt = node.UpdatedAt
+                };
+                var index = data.Nodes.FindIndex(candidate => candidate.Id == node.Id);
+                if (index < 0) data.Nodes.Add(imported);
+                else
+                {
+                    var current = data.Nodes[index];
+                    if (current.Kind == imported.Kind && current.Title == imported.Title && current.ParentId == imported.ParentId
+                        && current.Order == imported.Order && current.Content == imported.Content && current.CreatedAt == imported.CreatedAt
+                        && current.UpdatedAt == imported.UpdatedAt) return true;
+                    imported.CreatedAt = current.CreatedAt;
+                    imported.PreviousVersion = current.PreviousVersion;
+                    imported.ShowingAlternate = current.ShowingAlternate;
+                    data.Nodes[index] = imported;
+                }
+            }
+            Normalize(data.Nodes);
+            await store.WriteAsync(data, ct);
+            return true;
+        }
+        finally { mutationGate.Release(); }
+    }
 
     public async Task<KnowledgeBatchResult> ApplyBatchIfCurrentAsync(IReadOnlyList<KnowledgeBatchChange> changes, CancellationToken ct)
     {
@@ -94,7 +146,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
             }
 
             data.UpdatedAt = DateTimeOffset.UtcNow;
-            await store.WriteAsync(data, ct);
+            await WriteTrackedAsync(data, ct);
             return new(true, null);
         }
         finally { mutationGate.Release(); }
@@ -127,7 +179,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
             data.Nodes.Add(document);
             data.UpdatedAt = now;
             Normalize(data.Nodes);
-            await store.WriteAsync(data, ct);
+            await WriteTrackedAsync(data, ct);
             return new(true, section.Id, document.Id, null);
         }
         finally { mutationGate.Release(); }
@@ -164,7 +216,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
             node.PreviousVersion = current;
             node.ShowingAlternate = !node.ShowingAlternate;
             node.UpdatedAt = DateTimeOffset.UtcNow;
-            await store.WriteAsync(data, ct);
+            await WriteTrackedAsync(data, ct);
             return new(true, ToDocumentDto(node));
         }
         finally { mutationGate.Release(); }
@@ -230,7 +282,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
             }
             var now = DateTimeOffset.UtcNow;
             var node = new KnowledgeNode { Kind = kind, Title = cleanTitle!, Content = kind == "document" ? content ?? "" : null, ParentId = parentId, Order = NextOrder(data.Nodes, parentId), CreatedAt = now, UpdatedAt = now };
-            data.Nodes.Add(node); Normalize(data.Nodes); await store.WriteAsync(data, ct); return (node, null);
+            data.Nodes.Add(node); Normalize(data.Nodes); await WriteTrackedAsync(data, ct); return (node, null);
         } finally { mutationGate.Release(); }
     }
 
@@ -239,7 +291,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
         var clean = title?.Trim(); if (string.IsNullOrWhiteSpace(clean)) return "Название обязательно.";
         await mutationGate.WaitAsync(ct);
         try { var data = await store.ReadAsync(ct); var node = data.Nodes.FirstOrDefault(n => n.Id == id);
-            if (node is null) return "Узел не найден."; var oldTitle = node.Title; var oldContent = node.Content ?? ""; node.Title = clean; CaptureDocumentEdit(node, oldTitle, oldContent); node.UpdatedAt = DateTimeOffset.UtcNow; await store.WriteAsync(data, ct); return null;
+            if (node is null) return "Узел не найден."; var oldTitle = node.Title; var oldContent = node.Content ?? ""; node.Title = clean; CaptureDocumentEdit(node, oldTitle, oldContent); node.UpdatedAt = DateTimeOffset.UtcNow; await WriteTrackedAsync(data, ct); return null;
         } finally { mutationGate.Release(); }
     }
 
@@ -247,7 +299,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
     {
         await mutationGate.WaitAsync(ct);
         try { var data = await store.ReadAsync(ct); var node = data.Nodes.FirstOrDefault(n => n.Id == id && !n.IsSection);
-            if (node is null) return "Документ не найден."; var oldTitle = node.Title; var oldContent = node.Content ?? ""; node.Content = content ?? ""; CaptureDocumentEdit(node, oldTitle, oldContent); node.UpdatedAt = DateTimeOffset.UtcNow; await store.WriteAsync(data, ct); return null;
+            if (node is null) return "Документ не найден."; var oldTitle = node.Title; var oldContent = node.Content ?? ""; node.Content = content ?? ""; CaptureDocumentEdit(node, oldTitle, oldContent); node.UpdatedAt = DateTimeOffset.UtcNow; await WriteTrackedAsync(data, ct); return null;
         } finally { mutationGate.Release(); }
     }
 
@@ -266,7 +318,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
             node.Content = content ?? "";
             CaptureDocumentEdit(node, oldTitle, oldContent);
             node.UpdatedAt = DateTimeOffset.UtcNow;
-            await store.WriteAsync(data, ct);
+            await WriteTrackedAsync(data, ct);
             return null;
         }
         finally { mutationGate.Release(); }
@@ -292,7 +344,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
             node.Content = content;
             CaptureDocumentEdit(node, oldTitle, oldContent);
             node.UpdatedAt = DateTimeOffset.UtcNow;
-            await store.WriteAsync(data, ct);
+            await WriteTrackedAsync(data, ct);
             return null;
         }
         finally { mutationGate.Release(); }
@@ -308,7 +360,7 @@ public sealed class KnowledgeService(IKnowledgeStore store)
             var siblings = data.Nodes.Where(n => n.ParentId == parentId && n.Id != id).OrderBy(n => n.Order).ToList();
             var insertion = Math.Clamp(order, 0, siblings.Count); node.ParentId = parentId; node.Order = insertion; node.UpdatedAt = DateTimeOffset.UtcNow;
             foreach (var (sibling, index) in siblings.Select((item, index) => (item, index))) sibling.Order = index >= insertion ? index + 1 : index;
-            Normalize(data.Nodes); await store.WriteAsync(data, ct); return null;
+            Normalize(data.Nodes); await WriteTrackedAsync(data, ct); return null;
         } finally { mutationGate.Release(); }
     }
 
@@ -318,9 +370,44 @@ public sealed class KnowledgeService(IKnowledgeStore store)
         try { var data = await store.ReadAsync(ct); if (data.Nodes.All(n => n.Id != id)) return "Узел не найден.";
             var ids = new HashSet<Guid> { id }; var changed = true;
             while (changed) { changed = false; foreach (var n in data.Nodes.Where(n => n.ParentId is not null && ids.Contains(n.ParentId.Value))) if (ids.Add(n.Id)) changed = true; }
-            data.Nodes.RemoveAll(n => ids.Contains(n.Id)); Normalize(data.Nodes); await store.WriteAsync(data, ct); return null;
+            data.Nodes.RemoveAll(n => ids.Contains(n.Id)); Normalize(data.Nodes); await WriteTrackedAsync(data, ct); return null;
         } finally { mutationGate.Release(); }
     }
+
+    private async Task WriteTrackedAsync(KnowledgeDocument document, CancellationToken ct)
+    {
+        var previous = await store.ReadAsync(ct);
+        await store.WriteAsync(document, ct);
+        if (syncOutbox is null) return;
+
+        var before = previous.Nodes.ToDictionary(node => node.Id);
+        var after = document.Nodes.ToDictionary(node => node.Id);
+        var removed = before.Keys.Except(after.Keys).ToHashSet();
+        foreach (var id in removed.Where(id => before[id].ParentId is not Guid parentId || !removed.Contains(parentId)))
+            await syncOutbox.EnqueueAsync("knowledge.node", id, "delete", null, ct);
+
+        foreach (var node in document.Nodes)
+        {
+            if (before.TryGetValue(node.Id, out var old) && KnowledgeStateEquals(old, node)) continue;
+            var payload = System.Text.Json.JsonSerializer.SerializeToElement(new
+            {
+                id = node.Id,
+                kind = node.Kind,
+                title = node.Title,
+                markdown = node.IsSection ? null : node.Content ?? string.Empty,
+                parentId = node.ParentId,
+                position = node.Order,
+                version = 0,
+                path = (string?)null,
+                archived = false
+            });
+            await syncOutbox.EnqueueAsync("knowledge.node", node.Id, "upsert", payload, ct);
+        }
+    }
+
+    private static bool KnowledgeStateEquals(KnowledgeNode left, KnowledgeNode right) =>
+        left.Kind == right.Kind && left.Title == right.Title && left.ParentId == right.ParentId &&
+        left.Order == right.Order && left.Content == right.Content;
 
     private static KnowledgeDocumentDto ToDocumentDto(KnowledgeNode node) =>
         new(node.Id, node.Kind, node.Title, node.Content ?? "", node.CreatedAt, node.UpdatedAt, node.PreviousVersion, node.ShowingAlternate);

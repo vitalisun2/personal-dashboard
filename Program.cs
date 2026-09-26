@@ -14,6 +14,11 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 // The host is intentionally only the composition root. Each module owns its data and HTTP contract.
 builder.Services.AddTaskBoard();
 builder.Services.AddKnowledgeBase();
+builder.Services.AddHttpClient("V2Peer");
+builder.Services.AddSingleton<V1SyncOutbox>();
+builder.Services.AddSingleton<TaskBoard.Infrastructure.ITaskSyncOutbox>(services => services.GetRequiredService<V1SyncOutbox>());
+builder.Services.AddSingleton<KnowledgeBase.Api.Application.IKnowledgeSyncOutbox>(services => services.GetRequiredService<V1SyncOutbox>());
+builder.Services.AddHostedService(services => services.GetRequiredService<V1SyncOutbox>());
 builder.Services.AddAgentChat();
 builder.Services.AddSingleton<IMemoryRepository, MemoryRepository>();
 builder.Services.AddSingleton<IChatCommandFacade, TaskChatFacade>();
@@ -21,6 +26,27 @@ builder.Services.AddSingleton<IChatCommandFacade, KnowledgeChatFacade>();
 builder.Services.AddSingleton<IChatResponder, ReadOnlyChatResponder>();
 
 var app = builder.Build();
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api/sync/v2"))
+    {
+        var secret = app.Configuration["V1_V2_SYNC_KEY"];
+        if (string.IsNullOrWhiteSpace(secret))
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            return;
+        }
+        var supplied = context.Request.Headers["X-PersonalDashboard-Sync-Key"].ToString();
+        var expectedBytes = System.Text.Encoding.UTF8.GetBytes(secret);
+        var suppliedBytes = System.Text.Encoding.UTF8.GetBytes(supplied);
+        if (expectedBytes.Length != suppliedBytes.Length || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(expectedBytes, suppliedBytes))
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
+    }
+    await next();
+});
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapTaskBoardApi();

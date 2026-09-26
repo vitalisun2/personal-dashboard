@@ -332,6 +332,14 @@ public static class TaskBoardExtensions
 
     public static IEndpointRouteBuilder MapTaskBoardApi(this IEndpointRouteBuilder app)
     {
+        app.MapPost("/api/sync/v2/tasks", async (TaskPeerImport input, TaskStore store, CancellationToken ct) =>
+        {
+            if (input.Id == Guid.Empty || string.IsNullOrWhiteSpace(input.Title) || input.Placement is not ("backlog" or "today") || string.IsNullOrWhiteSpace(input.SectionName)) return Results.BadRequest();
+            var status = input.WorkStatus?.ToLowerInvariant() switch { "inprogress" => TaskState.InProgress, "done" => TaskState.Completed, _ => TaskState.New };
+            await store.ImportAsync(new TaskItem(input.Id, input.Title, input.Description ?? "", input.SectionName, input.Placement == "today" ? TaskBucket.Today : TaskBucket.Backlog, status, input.CreatedAt ?? DateTimeOffset.UtcNow), ct);
+            return Results.NoContent();
+        });
+        app.MapDelete("/api/sync/v2/tasks/{id:guid}", async (Guid id, TaskStore store, CancellationToken ct) => { await store.DeleteAsync(id, ct, publishSync: false); return Results.NoContent(); });
         app.MapGet("/api/tasks", async (TaskStore store, CancellationToken ct) => Results.Ok(await store.GetAllAsync(ct)));
         app.MapPost("/api/tasks", async (CreateTaskRequest request, TaskStore store, ITaskAgent agent, CancellationToken ct) =>
         {
@@ -358,3 +366,5 @@ public static class TaskBoardExtensions
     }
     private static bool ValidDraft(TaskDraft? draft) => draft is not null && !string.IsNullOrWhiteSpace(draft.Title) && !string.IsNullOrWhiteSpace(draft.Description) && !string.IsNullOrWhiteSpace(draft.Section);
 }
+
+public sealed record TaskPeerImport(Guid Id, string Title, string? Description, string Placement, string? WorkStatus, string? SectionName, DateTimeOffset? CreatedAt = null);

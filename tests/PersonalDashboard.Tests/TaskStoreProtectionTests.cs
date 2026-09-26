@@ -75,4 +75,51 @@ public sealed class TaskStoreProtectionTests
             Directory.Delete(directory, recursive: true);
         }
     }
+
+    [TestMethod]
+    public async Task PeerImportIsIdempotentAndPreservesV1AlternateState()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "dashboard-peer-" + Guid.NewGuid(), "tasks.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var outbox = new RecordingTaskSyncOutbox();
+        var store = new TaskStore(path, outbox);
+        var id = Guid.NewGuid();
+        var created = NewTask() with { Id = id };
+        try
+        {
+            await store.AddAsync(created);
+            await store.UpdateAsync(id, task => task with { Title = "Intermediate" });
+            var localOperationCount = outbox.Operations.Count;
+            created = (await store.GetAsync(id))!;
+            var imported = created with { Title = "Peer title", Description = "Peer body", Section = "Peer section", CreatedAt = DateTimeOffset.UtcNow };
+            await store.ImportAsync(imported);
+            var first = await store.GetAsync(id);
+            var lastWrite = File.GetLastWriteTimeUtc(path);
+            await store.ImportAsync(imported);
+            var second = await store.GetAsync(id);
+
+            Assert.AreEqual("Peer title", first!.Title);
+            Assert.AreEqual(created.CreatedAt, first.CreatedAt);
+            Assert.AreEqual(created.PreviousVersion, first.PreviousVersion);
+            Assert.AreEqual(created.ShowingAlternate, first.ShowingAlternate);
+            Assert.AreEqual(first, second);
+            Assert.AreEqual(lastWrite, File.GetLastWriteTimeUtc(path));
+            Assert.AreEqual(localOperationCount, outbox.Operations.Count, "Inbound imports must not echo into the outbound queue.");
+            await store.DeleteAsync(id, publishSync: false);
+            Assert.AreEqual(localOperationCount, outbox.Operations.Count, "Inbound deletes must not echo into the outbound queue.");
+        }
+        finally
+        {
+            if (Directory.Exists(Path.GetDirectoryName(path)!)) Directory.Delete(Path.GetDirectoryName(path)!, recursive: true);
+        }
+    }
+
+    private sealed class RecordingTaskSyncOutbox : ITaskSyncOutbox
+    {
+        public List<string> Operations { get; } = [];
+        public Task EnqueueAsync(string type, Guid id, string operation, System.Text.Json.JsonElement? payload, CancellationToken cancellationToken)
+        { Operations.Add($"{type}:{id}:{operation}"); return Task.CompletedTask; }
+        public Task EnqueueTaskAsync(string sectionName, string bucket, Guid id, System.Text.Json.JsonElement payload, CancellationToken cancellationToken)
+        { Operations.Add($"tasks.task:{id}:upsert:{bucket}:{sectionName}"); return Task.CompletedTask; }
+    }
 }
