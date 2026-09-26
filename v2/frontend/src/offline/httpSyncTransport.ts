@@ -7,11 +7,19 @@ export class HttpSyncTransport implements SyncTransport {
     this.baseUrl = baseUrl.replace(/\/$/, "");
   }
 
-  async pushOperations(request: SyncPushRequest) {
+  async getSyncEpoch(): Promise<string> {
+    const response = await this.fetcher(`${this.baseUrl}/api/v2/sync/state`, { cache: "no-store" });
+    await ensureOk(response);
+    const state = await response.json() as { epoch?: string };
+    if (!state.epoch) throw new Error("Sync server did not return a client-state epoch");
+    return state.epoch;
+  }
+
+  async pushOperations(request: SyncPushRequest, epoch: string) {
     const response = await this.fetcher(`${this.baseUrl}/api/v2/sync/push`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ ...request, epoch }),
     });
     await ensureOk(response);
     const result = await response.json() as SyncPushResponse;

@@ -62,7 +62,8 @@ export interface EntityChangePage<T = unknown> {
 }
 
 export interface SyncTransport {
-  pushOperations(request: SyncPushRequest): Promise<SyncPushResult[]>;
+  getSyncEpoch(): Promise<string>;
+  pushOperations(request: SyncPushRequest, epoch: string): Promise<SyncPushResult[]>;
   pullChanges(after: number, pageSize: number): Promise<EntityChangePage>;
 }
 
@@ -77,6 +78,9 @@ export interface OfflineStore {
   putConflict(conflict: SyncConflict): Promise<void>;
   getChangeCursor(): Promise<number>;
   setChangeCursor(sequence: number): Promise<void>;
+  getSyncEpoch(): Promise<string | undefined>;
+  setSyncEpoch(epoch: string): Promise<void>;
+  clearLocalData(): Promise<void>;
 }
 
 export interface SyncSummary {

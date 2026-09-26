@@ -43,8 +43,14 @@ export async function syncPendingOperations(
   now: () => Date = () => new Date(),
   pageSize = DEFAULT_PAGE_SIZE,
 ): Promise<SyncSummary> {
+  const epoch = await transport.getSyncEpoch();
+  if (await store.getSyncEpoch() !== epoch) {
+    await store.clearLocalData();
+    await store.setSyncEpoch(epoch);
+  }
+
   const operations = await store.listPendingOperations();
-  const pushResults = operations.length === 0 ? [] : await transport.pushOperations(toSyncPushRequest(operations));
+  const pushResults = operations.length === 0 ? [] : await transport.pushOperations(toSyncPushRequest(operations), epoch);
   if (pushResults.length !== operations.length) {
     throw new Error("Sync transport returned a different number of push results than operations");
   }

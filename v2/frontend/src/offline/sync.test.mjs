@@ -25,8 +25,12 @@ test('a version conflict preserves local work and blocks later edits for that en
     async putConflict(conflict) { conflicts.push(conflict); },
     async getChangeCursor() { return 0; },
     async setChangeCursor(sequence) { this.cursor = sequence; },
+    async getSyncEpoch() { return 'epoch-1'; },
+    async setSyncEpoch(epoch) { this.epoch = epoch; },
+    async clearLocalData() { throw new Error('Unexpected offline reset'); },
   };
   const transport = {
+    async getSyncEpoch() { return 'epoch-1'; },
     async pushOperations(request) {
       sent.push(...request.operations.map(operation => operation.operationId));
       return [
@@ -76,8 +80,12 @@ test('an in-flight push does not replace a newer local edit of the same entity',
     async putConflict() { throw new Error('Unexpected conflict'); },
     async getChangeCursor() { return 0; },
     async setChangeCursor() {},
+    async getSyncEpoch() { return 'epoch-1'; },
+    async setSyncEpoch() {},
+    async clearLocalData() { throw new Error('Unexpected offline reset'); },
   };
   const transport = {
+    async getSyncEpoch() { return 'epoch-1'; },
     async pushOperations() {
       pending.push(second);
       return [{ operationId: 'first', applied: true, skipped: false, current: { type: 'tasks.task', id: 'task-a', version: 2, deleted: false, payload: { title: 'First edit' } }, conflictReason: null }];
@@ -92,4 +100,44 @@ test('an in-flight push does not replace a newer local edit of the same entity',
   assert.deepEqual(summary, { applied: 1, conflicts: 0, pulled: 1 });
   assert.deepEqual(local.payload, { title: 'Second edit' });
   assert.deepEqual(pending.map(operation => operation.operationId), ['second']);
+});
+
+test('a new server epoch clears old cached records and queued mutations before syncing', async () => {
+  const entities = [{ type: 'planning.project', id: 'old-project', version: 1, deleted: false, payload: { title: 'stale' } }];
+  const pending = [{ operationId: 'stale-op', type: 'planning.project', id: 'old-project', kind: 'upsert', expectedVersion: null, payload: { title: 'stale' }, createdAt: '2026-09-25T10:00:00Z' }];
+  const conflicts = [{ operationId: 'stale-conflict' }];
+  let localEpoch = 'old-epoch';
+  let cursor = 99;
+  const pushedEpochs = [];
+  const store = {
+    async listEntities() { return entities; },
+    async getEntity(type, id) { return entities.find(entity => entity.type === type && entity.id === id); },
+    async listPendingOperations() { return [...pending]; },
+    async removeOperation(id) { pending.splice(pending.findIndex(operation => operation.operationId === id), 1); },
+    async putEntity(entity) { entities.push(entity); },
+    async putConflict(conflict) { conflicts.push(conflict); },
+    async getChangeCursor() { return cursor; },
+    async setChangeCursor(sequence) { cursor = sequence; },
+    async getSyncEpoch() { return localEpoch; },
+    async setSyncEpoch(epoch) { localEpoch = epoch; },
+    async clearLocalData() { entities.length = 0; pending.length = 0; conflicts.length = 0; cursor = 0; },
+  };
+  const transport = {
+    async getSyncEpoch() { return 'new-epoch'; },
+    async pushOperations(_request, epoch) { pushedEpochs.push(epoch); return []; },
+    async pullChanges(after) {
+      assert.equal(after, 0);
+      return { changes: [{ sequence: 7, snapshot: { type: 'tasks.task', id: 'v1-task', version: 1, payload: { title: 'V1' }, deleted: false } }], nextSequence: 7, isComplete: true };
+    },
+  };
+
+  const result = await syncPendingOperations(store, transport);
+
+  assert.deepEqual(result, { applied: 0, conflicts: 0, pulled: 1 });
+  assert.equal(localEpoch, 'new-epoch');
+  assert.deepEqual(pushedEpochs, []);
+  assert.deepEqual(entities.map(entity => [entity.id, entity.deleted]), [['v1-task', false]]);
+  assert.deepEqual(pending, []);
+  assert.deepEqual(conflicts, []);
+  assert.equal(cursor, 7);
 });

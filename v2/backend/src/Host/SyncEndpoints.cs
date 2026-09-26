@@ -6,9 +6,13 @@ using PersonalDashboard.V2.Contracts.Transactions;
 
 internal static class SyncEndpoints
 {
+    // Bump this whenever a migration intentionally invalidates offline client state.
+    private const string CurrentSyncEpoch = "2026-09-26-v1-data-reset";
+
     public static IEndpointRouteBuilder MapSyncEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/api/v2/sync");
+        group.MapGet("/state", () => Results.Ok(new SyncState(CurrentSyncEpoch)));
         group.MapPost("/push", PushAsync);
         group.MapGet("/changes", ReadChangesAsync);
         return endpoints;
@@ -21,6 +25,15 @@ internal static class SyncEndpoints
         ITransactionRunner transactionRunner,
         CancellationToken cancellationToken)
     {
+        if (!string.Equals(request.Epoch, CurrentSyncEpoch, StringComparison.Ordinal))
+        {
+            return Results.Conflict(new
+            {
+                error = "Offline client state is stale. Reload the application before syncing.",
+                currentEpoch = CurrentSyncEpoch,
+            });
+        }
+
         if (request.Operations is null)
         {
             return Results.BadRequest(new { error = "Operations are required." });
@@ -142,7 +155,9 @@ internal static class SyncEndpoints
         new(operationId, result.Applied, false, result.Current, result.ConflictReason);
 }
 
-internal sealed record SyncPushRequest(IReadOnlyList<SyncOperation>? Operations);
+internal sealed record SyncState(string Epoch);
+
+internal sealed record SyncPushRequest(IReadOnlyList<SyncOperation>? Operations, string? Epoch);
 
 internal sealed record SyncPushResponse(IReadOnlyList<SyncPushResult> Results);
 

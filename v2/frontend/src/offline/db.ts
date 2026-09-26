@@ -1,11 +1,17 @@
 import type { OfflineEntity, OfflineStore, SyncConflict, SyncOperation } from "./types";
 
 const DATABASE_NAME = "personal-dashboard-v2";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const database = request.result as unknown;
+      if (typeof IDBDatabase !== "undefined" && database instanceof IDBDatabase) {
+        database.onversionchange = () => database.close();
+      }
+      resolve(request.result);
+    };
     request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
   });
 }
@@ -23,7 +29,7 @@ export async function openOfflineDb(
   factory: IDBFactory = indexedDB,
 ): Promise<IDBDatabase> {
   const request = factory.open(name, DATABASE_VERSION);
-  request.onupgradeneeded = () => {
+  request.onupgradeneeded = event => {
     const database = request.result;
     if (!database.objectStoreNames.contains("entities")) {
       database.createObjectStore("entities", { keyPath: ["type", "id"] });
@@ -37,6 +43,11 @@ export async function openOfflineDb(
     }
     if (!database.objectStoreNames.contains("metadata")) {
       database.createObjectStore("metadata");
+    }
+    if (event.oldVersion > 0 && event.oldVersion < DATABASE_VERSION) {
+      for (const storeName of ["entities", "operations", "conflicts", "metadata"]) {
+        request.transaction!.objectStore(storeName).clear();
+      }
     }
   };
   return requestResult(request);
@@ -102,6 +113,22 @@ export class IndexedDbOfflineStore implements OfflineStore {
 
   async setChangeCursor(sequence: number): Promise<void> {
     await this.write("metadata", sequence, "changeCursor");
+  }
+
+  async getSyncEpoch(): Promise<string | undefined> {
+    return this.read<string>("metadata", "syncEpoch");
+  }
+
+  async setSyncEpoch(epoch: string): Promise<void> {
+    await this.write("metadata", epoch, "syncEpoch");
+  }
+
+  async clearLocalData(): Promise<void> {
+    const transaction = this.database.transaction(["entities", "operations", "conflicts", "metadata"], "readwrite");
+    for (const storeName of ["entities", "operations", "conflicts", "metadata"]) {
+      transaction.objectStore(storeName).clear();
+    }
+    await transactionDone(transaction);
   }
 
   async listConflicts(): Promise<SyncConflict[]> {
