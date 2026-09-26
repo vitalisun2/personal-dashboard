@@ -42,128 +42,14 @@ public sealed class AgentTurnService(
 {
     private const int MaxToolRounds = 4;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-        private static readonly ModelTool[] Tools =
+    private static readonly ModelTool[] Tools =
     [
-        new("search_app", "Search current application data and optionally prior chat discussions.", """
-        {"type":"object","properties":{"query":{"type":"string"},"exhaustive":{"type":"boolean"}},"required":["query"],"additionalProperties":false}
+        new("search_app", "Search only the Planning or Tasks section for questions and lookups; returned currentEntity values are current context. Do not use this for Knowledge search: direct the user to the dedicated Knowledge section search. If the section is unclear, ask the user.", """
+        {"type":"object","properties":{"query":{"type":"string"},"section":{"type":"string","enum":["planning","tasks"]},"exhaustive":{"type":"boolean"}},"required":["query","section"],"additionalProperties":false}
         """),
-        new("get_current_entity", "Read one current document, plan item, task, or task section by exact type and ID.", """
-        {"type":"object","properties":{"entityType":{"type":"string"},"entityId":{"type":"string","format":"uuid"}},"required":["entityType","entityId"],"additionalProperties":false}
-        """),
-        new("propose_changes", "Prepare a structured package of changes for user review. This never writes data. For Create operations entityId is NOT required - the server assigns one; instead give the title and, when the new entity must live inside another one, name the parent by its exact title in after.parent_section_title / after.project_title / after.milestone_title / after.feature_title / after.section_title. The server resolves a parent named by title. For Update, Move, Archive, Restore, Delete, SetWorkStatus, SetFeatureStatus and Reorder operations entityId of the existing object is required along with its exact expectedVersion.", """
-        {
-            "type": "object",
-            "properties": {
-                "changes": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "module": {
-                                "type": "string",
-                                "enum": [
-                                    "Knowledge",
-                                    "Planning",
-                                    "Tasks"
-                                ]
-                            },
-                            "operation": {
-                                "type": "string",
-                                "enum": [
-                                    "Create",
-                                    "Update",
-                                    "Move",
-                                    "Archive",
-                                    "Restore",
-                                    "Delete",
-                                    "SetWorkStatus",
-                                    "SetFeatureStatus",
-                                    "Reorder"
-                                ]
-                            },
-                            "entityType": {
-                                "type": "string"
-                            },
-                            "entityId": {
-                                "type": "string",
-                                "format": "uuid"
-                            },
-                            "expectedVersion": {
-                                "type": "integer",
-                                "minimum": 1
-                            },
-                            "after": {
-                                "type": "object",
-                                "properties": {
-                                    "title": {
-                                        "type": "string"
-                                    },
-                                    "markdown": {
-                                        "type": "string"
-                                    },
-                                    "description": {
-                                        "type": "string"
-                                    },
-                                    "parent_section_title": {
-                                        "type": "string"
-                                    },
-                                    "section_title": {
-                                        "type": "string"
-                                    },
-                                    "project_title": {
-                                        "type": "string"
-                                    },
-                                    "milestone_title": {
-                                        "type": "string"
-                                    },
-                                    "feature_title": {
-                                        "type": "string"
-                                    },
-                                    "placement": {
-                                        "type": "string",
-                                        "enum": [
-                                            "planned",
-                                            "backlog",
-                                            "today"
-                                        ]
-                                    },
-                                    "work_status": {
-                                        "type": "string",
-                                        "enum": [
-                                            "new",
-                                            "in_progress",
-                                            "done"
-                                        ]
-                                    },
-                                    "feature_status": {
-                                        "type": "string",
-                                        "enum": [
-                                            "planned",
-                                            "active",
-                                            "done"
-                                        ]
-                                    }
-                                },
-                                "additionalProperties": true
-                            }
-                        },
-                        "required": [
-                            "module",
-                            "operation",
-                            "entityType",
-                            "after"
-                        ],
-                        "additionalProperties": true
-                    }
-                }
-            },
-            "required": [
-                "changes"
-            ],
-            "additionalProperties": false
-        }
-        """),
+        new("propose_changes", "Prepare exactly one new knowledge.document or tasks.task for user review. Never update existing data. If section, object kind, title, or document markdown is unclear, ask the user instead of proposing.", """
+        {"type":"object","properties":{"changes":{"type":"array","minItems":1,"maxItems":1,"items":{"type":"object","properties":{"module":{"type":"string","enum":["Knowledge","Tasks"]},"operation":{"type":"string","enum":["Create"]},"entityType":{"type":"string","enum":["knowledge.document","tasks.task"]},"after":{"type":"object","properties":{"title":{"type":"string"},"markdown":{"type":"string"},"description":{"type":"string"},"parent_section_title":{"type":"string"},"section_title":{"type":"string"}},"additionalProperties":false}},"required":["module","operation","entityType","after"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}
+        """)
     ];
 
     public async Task<AgentTurnResult> RespondAsync(AgentTurnRequest request, CancellationToken cancellationToken = default)
@@ -172,7 +58,7 @@ public sealed class AgentTurnService(
         var resolvedScope = await ResolveScopeAsync(request.Scope, cancellationToken);
         var messages = new List<ModelMessage>
         {
-            new("system", "You are the Personal OS assistant. ALWAYS use the provided tools - never answer about user data from memory and never refuse with apologies. Any question or reference about user content ('what do I have about X', 'find', 'where', summaries) requires calling search_app first; exact reading requires get_current_entity. Any request to create, edit, move, archive, restore, delete or change status of a knowledge section/document, planning project/milestone/feature, task or task section requires calling propose_changes with full values. Do not answer until you have called the right tool. Reply in the user's language, briefly. Active scope: general."),
+            new("system", "You are the Personal OS assistant. Use only configured local Gemma. For application-data questions in Planning or Tasks call search_app and classify the request into that section. Never search Knowledge through this tool; direct Knowledge search questions to the dedicated search in the Knowledge section. The only changes you may propose are creating exactly one new knowledge.document or tasks.task. Never change existing data or create other object types. For ambiguity about section, intent, object type, title, or required content, ask a concise clarification and create nothing. Tasks require a title; description is optional. A knowledge document requires title and markdown. Never invent required values. Proposals require user confirmation. Reply in the user's language."),
         };
         if (resolvedScope.Mode == "entity")
         {
@@ -196,8 +82,8 @@ public sealed class AgentTurnService(
                     {
                         var hadTools = allSources.Count > 0;
                         messages.Add(new ModelMessage("user", hadTools
-                            ? "(Instruction) The search results above are your only source. Answer now in the user's language, quoting the returned titles. If the user asked to create or edit anything, call propose_changes now."
-                            : "(Instruction) This request concerns your user's data or a change to it. You MUST call a tool before answering: search_app for any question about data, propose_changes for any create/edit/delete. Do not answer without a tool result."));
+                            ? "(Instruction) The search results above are your only source. Answer now in the user's language, quoting the returned titles. If the user asked to create a new document or task, call propose_changes now."
+                            : "(Instruction) For data questions call search_app. Propose only creation of one new knowledge document or task. If section, object, or required values are unclear, ask the user; do not invent values."));
                         continue;
                     }
                     return new AgentTurnResult(GroundLookupAnswer(request.Prompt, completion.Content ?? string.Empty, allSources), resolvedScope, lastRoute.RequestedModel,
@@ -222,7 +108,7 @@ public sealed class AgentTurnService(
                     catch (Exception error) when (error is InvalidDataException or ArgumentException or FormatException or KeyNotFoundException or InvalidOperationException or JsonException)
                     {
                         messages.Add(new ModelMessage("tool", "Proposal rejected: " + error.Message +
-                            " Use exact entity types knowledge.document, knowledge.section, planning.project, planning.milestone, planning.feature, tasks.task, or tasks.section. No data was changed. Correct the proposal or ask for clarification.", ToolCallId: call.Id, Name: call.Name));
+                            " No data was changed. Only propose creating one new knowledge document or task. If required information is unclear, ask the user for clarification.", ToolCallId: call.Id, Name: call.Name));
                         continue;
                     }
                 }
@@ -230,7 +116,6 @@ public sealed class AgentTurnService(
                 var output = call.Name switch
                 {
                     "search_app" => await SearchAsync(call.ArgumentsJson, request with { Scope = resolvedScope }, allSources, cancellationToken),
-                    "get_current_entity" => await ReadCurrentAsync(call.ArgumentsJson, cancellationToken),
                     _ => "Unknown tool."
                 };
                 messages.Add(new ModelMessage("tool", output, ToolCallId: call.Id, Name: call.Name));
@@ -245,7 +130,15 @@ public sealed class AgentTurnService(
         var root = json.RootElement;
         var query = RequiredString(root, "query");
         var exhaustive = root.TryGetProperty("exhaustive", out var exhaustiveValue) && exhaustiveValue.GetBoolean();
-        var kinds = new List<string> { "knowledge.document", "knowledge.section", "planning.project", "planning.milestone", "planning.feature", "tasks.task", "tasks.section" };
+        var section = RequiredString(root, "section");
+        if (section == "knowledge")
+            return "Поиск по базе знаний выполняется отдельно в разделе «База знаний». Перейдите туда и используйте его поиск.";
+        var kinds = section switch
+        {
+            "planning" => new List<string> { "planning.project", "planning.milestone", "planning.feature" },
+            "tasks" => new List<string> { "tasks.task", "tasks.section" },
+            _ => throw new InvalidDataException("Choose one app section before searching.")
+        };
                 var context = request.Scope.Mode.Equals("entity", StringComparison.OrdinalIgnoreCase) && request.Scope.EntityId is not null
             ? new SearchChatFilter(EntityId: request.Scope.EntityId, EntityType: request.Scope.EntityType)
             : null;
@@ -306,12 +199,16 @@ public sealed class AgentTurnService(
         using var json = JsonDocument.Parse(arguments);
         if (!json.RootElement.TryGetProperty("changes", out var changes) || changes.ValueKind != JsonValueKind.Array)
             throw new InvalidDataException("Proposal changes must be an array.");
+        if (changes.GetArrayLength() != 1)
+            throw new InvalidDataException("Create one object at a time; ask for clarification if the request is ambiguous.");
         var prepared = new List<ProposedChange>();
         foreach (var item in changes.EnumerateArray())
         {
             var module = Enum.Parse<ChangeModule>(RequiredString(item, "module"), ignoreCase: true);
             var operation = Enum.Parse<ChangeOperation>(RequiredString(item, "operation"), ignoreCase: true);
             var entityType = NormalizeEntityType(module, RequiredString(item, "entityType"));
+            if (operation != ChangeOperation.Create || entityType is not ("knowledge.document" or "tasks.task"))
+                throw new InvalidDataException("Only creation of one new knowledge document or task is allowed. Ask for clarification if needed.");
             var afterElement = item.GetProperty("after");
             var idElement = OptionalString(item, "entityId");
             if (idElement is null && operation != ChangeOperation.Create)

@@ -28,8 +28,7 @@ public static class AgentApiModule
         ILoggerFactory loggerFactory, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Message)) return Results.BadRequest(new { error = "Message is required." });
-        var requestedModel = request.RequestedModel is "Gemma" or "DeepSeek" ? request.RequestedModel : null;
-        if (requestedModel is null) return Results.BadRequest(new { error = "Model must be Gemma or DeepSeek." });
+        const string requestedModel = "Gemma";
         var scope = new AgentScope(request.Scope?.Mode ?? "general", request.Scope?.EntityType, request.Scope?.EntityId,
             request.Scope?.EntityVersion);
         if (scope.Mode is not ("general" or "entity")) return Results.BadRequest(new { error = "Scope mode must be general or entity." });
@@ -46,9 +45,17 @@ public static class AgentApiModule
             new("assistant", turn.AssistantText)
         }).ToArray();
         var turnId = Guid.NewGuid();
-        var requestedRoute = requestedModel == "DeepSeek" ? ChatModelRoute.ManualSelection : ChatModelRoute.Default;
-        var result = await agent.RespondAsync(new AgentTurnRequest(conversationId, turnId, request.Message.Trim(), scope,
-            requestedModel, requestedRoute, recent), cancellationToken);
+        AgentTurnResult result;
+        try
+        {
+            result = await agent.RespondAsync(new AgentTurnRequest(conversationId, turnId, request.Message.Trim(), scope,
+                requestedModel, ChatModelRoute.Default, recent), cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (ChatModelUnavailableException)
+        {
+            return Results.Json(new { error = "Gemma временно недоступна. Попробуйте позже." }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
 
         var now = DateTimeOffset.UtcNow;
         var turn = new ChatTurn(turnId, conversationId, request.Message.Trim(), result.Answer,
@@ -127,6 +134,6 @@ public static class AgentApiModule
 
     private static string ShortTitle(string text) => text.Length <= 72 ? text : text[..69] + "...";
 
-    private sealed record SendTurnRequest(string Message, ScopeRequest? Scope, string RequestedModel);
+    private sealed record SendTurnRequest(string Message, ScopeRequest? Scope, string? RequestedModel = null);
     private sealed record ScopeRequest(string Mode, string? EntityType, Guid? EntityId, long? EntityVersion);
 }

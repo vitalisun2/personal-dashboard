@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { chatApi, ProposalConflictError, type ChatConversation, type ChatEntityEntry, type ChatModel, type ChatScope, type ChatTurn, type ProposalConflictPayload } from './chatApi'
+import { chatApi, ProposalConflictError, type ChatConversation, type ChatEntityEntry, type ChatScope, type ChatTurn, type ProposalConflictPayload } from './chatApi'
 import './chatView.css'
 
 const props = defineProps<{
@@ -22,7 +22,6 @@ const loadingOlder = ref(false)
 const error = ref('')
 const conflictPreview = ref<ProposalConflictPayload | null>(null)
 const input = ref('')
-const selectedModel = ref<ChatModel>('Gemma')
 const scopeMode = ref<'entity' | 'general'>(props.entity ? 'entity' : 'general')
 const scrollContainer = ref<HTMLElement | null>(null)
 const inputElement = ref<HTMLTextAreaElement | null>(null)
@@ -62,7 +61,6 @@ async function loadConversation() {
   try {
     if (props.conversationId) conversation.value = await chatApi.get(props.conversationId, props.targetTurnId)
     else conversation.value = await chatApi.create()
-    selectedModel.value = 'Gemma'
     scopeMode.value = props.entity ? 'entity' : 'general'
     await scrollToTargetOrLatest(props.targetTurnId)
   } catch (cause) {
@@ -117,7 +115,6 @@ async function newConversation() {
     if (previous) void chatApi.delete(previous).catch(() => undefined)
     conversation.value = await chatApi.create()
     scopeMode.value = props.entity ? 'entity' : 'general'
-    selectedModel.value = 'Gemma'
     input.value = ''
   } catch (cause) { error.value = cause instanceof Error ? cause.message : 'Не удалось создать диалог.' }
   finally { loading.value = false }
@@ -146,7 +143,7 @@ async function send() {
   conflictPreview.value = null
   input.value = ''
   try {
-    const result = await chatApi.send(conversation.value.id, message, scope.value, selectedModel.value)
+    const result = await chatApi.send(conversation.value.id, message, scope.value)
     conversation.value = await chatApi.get(conversation.value.id, result.turn.id)
     // The choice applies to this request; keep it selected for the next turn too.
     await refreshHistory()
@@ -209,9 +206,7 @@ function formatScope(turn: ChatTurn) {
 }
 
 function routeLabel(turn: ChatTurn) {
-  return turn.requestedModel === turn.actualModel
-    ? turn.modelRoute === 'ManualSelection' ? `${turn.requestedModel} · выбран вручную` : turn.actualModel
-    : `${turn.requestedModel} → ${turn.actualModel} · автоматический переход`
+  return 'Gemma'
 }
 
 function operationLabel(operation: string) {
@@ -260,12 +255,6 @@ onBeforeUnmount(() => {
           <button type="button" class="doc-action doc-back" @click="emit('back')">← Назад</button>
           <div class="chat-back-actions">
             <button type="button" class="chat-new-btn" @click="newConversation" aria-label="Новый чат" title="Новый чат">＋</button>
-            <label class="chat-model-select">
-          <select v-model="selectedModel" aria-label="Модель следующего ответа">
-            <option value="Gemma">Gemma</option>
-            <option value="DeepSeek">DeepSeek</option>
-          </select>
-        </label>
       </div>
     </div>
 
@@ -288,7 +277,6 @@ onBeforeUnmount(() => {
             <div :id="`turn-${turn.id}`" class="chat-answer" :class="{ 'target-turn': turn.id === props.targetTurnId }">
               <div class="chat-bubble">{{ turn.assistantMessage }}</div>
               <div class="turn-meta"><span>{{ formatScope(turn) }}</span><span>{{ routeLabel(turn) }}</span></div>
-              <div v-if="turn.fallbackReason" class="route-note">Автоматический переход: {{ turn.fallbackReason }}</div>
               <div v-if="turn.sourceDetails?.length || turn.sourceReferences?.length" class="source-list">
                 <span>Источники:</span>
                 <a v-for="source in turn.sourceDetails ?? []" :key="source.url ?? source.title" :href="source.url ?? '#'" :title="source.snippet">{{ source.title }}</a>

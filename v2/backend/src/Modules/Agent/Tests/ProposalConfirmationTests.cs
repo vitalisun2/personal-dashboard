@@ -13,26 +13,21 @@ public sealed class ProposalConfirmationTests
     [Fact]
     public async Task Model_supplied_display_label_and_preview_are_not_authoritative()
     {
-        var entityId = Guid.NewGuid();
-        var knowledge = new KnowledgeAccess([])
-        {
-            ReadState = new KnowledgeNodeState(KnowledgeNodeKind.Document, entityId, null, 3, "Actual document title", "old body", "docs/actual", false, 0)
-        };
         var toolArgs = JsonSerializer.Serialize(new
         {
             changes = new[]
             {
-                new { module = "Knowledge", operation = "Update", entityType = "knowledge.document", entityId,
-                    expectedVersion = 3, displayName = "Delete everything", preview = "Safe to confirm",
+                new { module = "Knowledge", operation = "Create", entityType = "knowledge.document",
+                    displayName = "Delete everything", preview = "Safe to confirm",
                     after = new { title = "New title", markdown = "new body" } }
             }
         });
-        var service = new AgentTurnService(new FixedRouter(toolArgs), new EmptySearch(), knowledge, new EmptyPlanning(), new EmptyTasks());
+        var service = new AgentTurnService(new FixedRouter(toolArgs), new EmptySearch(), new KnowledgeAccess([]), new EmptyPlanning(), new EmptyTasks());
         var response = await service.RespondAsync(new AgentTurnRequest(Guid.NewGuid(), Guid.NewGuid(), "Please edit the doc.",
             new AgentScope("general", null, null, null), "Gemma", PersonalDashboard.V2.Contracts.Chat.ChatModelRoute.Default, []));
 
         var change = Assert.Single(Assert.IsType<PersonalDashboard.V2.Agent.Domain.ChangeProposal>(response.Proposal).Changes);
-        Assert.Equal("Документ знаний · Actual document title", change.DisplayName);
+        Assert.Equal("Документ знаний · New title", change.DisplayName);
         Assert.DoesNotContain("Delete everything", change.DisplayName);
         Assert.DoesNotContain("Safe to confirm", change.Preview);
         Assert.Contains("название", change.Preview);
@@ -40,39 +35,31 @@ public sealed class ProposalConfirmationTests
     }
 
     [Fact]
-    public async Task Router_falls_back_on_malformed_tool_json_but_not_on_explicit_DeepSeek_failure()
+    public async Task Router_uses_only_Gemma_and_does_not_fallback_on_invalid_response()
     {
         var gemma = new Provider("Gemma", new ModelCompletion(null, [new ModelToolCall("1", "search_app", "not-json")]));
-        var deepSeek = new Provider("DeepSeek", new ModelCompletion("fallback", []));
         var request = new ModelCompletionRequest([], [new ModelTool("search_app", "search", "{}")]);
-        var router = new ChatModelRouter([gemma, deepSeek]);
-        var result = await router.CompleteAsync("Gemma", request, CancellationToken.None);
-        Assert.Equal("DeepSeek", result.ActualModel);
-        Assert.Equal(1, deepSeek.Calls);
-
-        deepSeek.Result = null;
-        deepSeek.Error = new HttpRequestException("provider unavailable");
-        await Assert.ThrowsAsync<HttpRequestException>(() => router.CompleteAsync("DeepSeek", request, CancellationToken.None));
+        var router = new ChatModelRouter([gemma]);
+        var unavailable = await Assert.ThrowsAsync<ChatModelUnavailableException>(() => router.CompleteAsync("Gemma", request, CancellationToken.None));
+        Assert.IsAssignableFrom<JsonException>(unavailable.InnerException);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => router.CompleteAsync("DeepSeek", request, CancellationToken.None));
         Assert.Equal(1, gemma.Calls);
     }
 
     [Fact]
-    public async Task Stale_package_rolls_back_prior_action_and_same_confirmation_is_idempotent()
+    public async Task Confirmation_rejects_multi_action_packages_and_same_confirmation_is_idempotent()
     {
         var store = new Store();
         var transactions = new RollbackRunner();
         var knowledge = new KnowledgeAccess(transactions.Writes);
         var service = new ProposalConfirmationService(store, transactions, knowledge, new EmptyPlanning(), new EmptyTasks());
 
-        store.Proposal = Proposal([Action("first"), Action("stale")]);
-        knowledge.StaleId = store.Proposal.Actions[1].EntityId;
-        var stale = await service.ConfirmAsync(store.Proposal.Id, Guid.NewGuid());
-        Assert.True(stale.Stale);
+        store.Proposal = Proposal([Action("first"), Action("second")]);
+        var rejected = await service.ConfirmAsync(store.Proposal.Id, Guid.NewGuid());
+        Assert.False(rejected.Applied);
         Assert.Empty(transactions.Writes);
-        Assert.Equal(ChatProposalState.Dismissed, store.Proposal.State);
 
         store.Proposal = Proposal([Action("safe")]);
-        knowledge.StaleId = null;
         var confirmationId = Guid.NewGuid();
         var first = await service.ConfirmAsync(store.Proposal.Id, confirmationId);
         var repeat = await service.ConfirmAsync(store.Proposal.Id, confirmationId);
@@ -85,7 +72,7 @@ public sealed class ProposalConfirmationTests
         new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), actions, ChatProposalState.Pending, null, DateTimeOffset.UtcNow);
 
     private static ChatProposedAction Action(string title) => new(Guid.NewGuid(), "knowledge.document", Guid.NewGuid(),
-        "Update", 1, JsonDocument.Parse($"{{\"title\":\"{title}\",\"markdown\":\"body\"}}").RootElement.Clone(), title, null, null);
+        "Create", 1, JsonDocument.Parse($"{{\"title\":\"{title}\",\"markdown\":\"body\"}}").RootElement.Clone(), title, null, null);
 
     private sealed class Provider(string model, ModelCompletion? result) : IChatModelProvider
     {
@@ -120,6 +107,7 @@ public sealed class ProposalConfirmationTests
         public Task<ChatConversationState?> GetConversationAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<ChatConversationState?>(null);
         public Task<ChatConversationState> CreateConversationAsync(Guid id, string? title, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<ChatConversationPage> ListConversationsAsync(string? cursor, int pageSize, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task DeleteConversationAsync(Guid id, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<IReadOnlyList<ChatTurn>> GetRecentTurnsAsync(Guid conversationId, int limit, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<ChatTurnPage> GetTurnsPageAsync(Guid conversationId, string? cursor, int pageSize, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task AppendTurnAsync(ChatTurn turn, CancellationToken cancellationToken = default) => throw new NotImplementedException();

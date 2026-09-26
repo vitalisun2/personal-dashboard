@@ -1,41 +1,26 @@
 namespace PersonalDashboard.V2.Agent.Application;
 
+public sealed class ChatModelUnavailableException(string message, Exception innerException) : Exception(message, innerException) { }
+
 public sealed class ChatModelRouter(IEnumerable<IChatModelProvider> providers) : IChatModelRouter
 {
     private readonly IReadOnlyDictionary<string, IChatModelProvider> _providers = providers.ToDictionary(x => x.Model, StringComparer.OrdinalIgnoreCase);
 
     public async Task<RoutedCompletion> CompleteAsync(string requestedModel, ModelCompletionRequest request, CancellationToken cancellationToken)
     {
-        var primary = GetProvider(requestedModel);
+        if (!string.Equals(requestedModel, "Gemma", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Only the configured Gemma model is available.");
+        var primary = GetProvider("Gemma");
         try
         {
             var response = await primary.CompleteAsync(request, cancellationToken);
-            if (IsUsable(response, request)) return new RoutedCompletion(response, requestedModel, requestedModel, null);
-            throw new InvalidOperationException($"{requestedModel} returned neither text nor tool calls.");
+            if (!IsUsable(response, request)) throw new InvalidOperationException("Gemma returned neither text nor tool calls.");
+            return new RoutedCompletion(response, "Gemma", "Gemma", null);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception error)
         {
-            throw;
-        }
-        catch (Exception primaryError)
-        {
-            if (string.Equals(requestedModel, "DeepSeek", StringComparison.OrdinalIgnoreCase)) throw;
-            var fallbackModel = string.Equals(requestedModel, "Gemma", StringComparison.OrdinalIgnoreCase) ? "DeepSeek" : "Gemma";
-            if (!_providers.TryGetValue(fallbackModel, out var fallback)) throw;
-            try
-            {
-                var response = await fallback.CompleteAsync(request, cancellationToken);
-                if (!IsUsable(response, request)) throw new InvalidOperationException($"{fallbackModel} returned neither text nor valid tool calls.");
-                return new RoutedCompletion(response, requestedModel, fallbackModel, DescribeFailure(primaryError));
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception fallbackError)
-            {
-                throw new AggregateException("The requested chat model and its fallback both failed.", primaryError, fallbackError);
-            }
+            throw new ChatModelUnavailableException("Gemma is unavailable or returned an unusable response.", error);
         }
     }
 
@@ -59,7 +44,4 @@ public sealed class ChatModelRouter(IEnumerable<IChatModelProvider> providers) :
         return !string.IsNullOrWhiteSpace(completion.Content);
     }
 
-    private static string DescribeFailure(Exception error) => error is HttpRequestException
-        ? "Requested provider was unavailable."
-        : "Requested provider returned an unusable response.";
 }

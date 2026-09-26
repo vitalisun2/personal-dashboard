@@ -1,4 +1,4 @@
-export type ChatModel = 'Gemma' | 'DeepSeek'
+export type ChatModel = 'Gemma'
 export type ChatScope =
   | { mode: 'general' }
   | { mode: 'entity'; entityType: string; entityId: string; entityVersion: number }
@@ -112,7 +112,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         if (cause instanceof ProposalConflictError) throw cause
       }
     }
-    let message = detail || `Chat request failed (${response.status})`
+    let message = response.status === 503 ? 'Gemma временно недоступна. Попробуйте позже.' : detail || `Chat request failed (${response.status})`
     try {
       const parsed = JSON.parse(detail) as { error?: string; message?: string; title?: string }
       message = parsed.error || parsed.message || parsed.title || message
@@ -128,9 +128,9 @@ export const chatApi = {
   olderTurns: (id: string, cursor: string) => request<{ turns: ChatTurn[]; nextCursor: string | null }>(`/api/v2/chat/conversations/${encodeURIComponent(id)}/turns?cursor=${encodeURIComponent(cursor)}`),
   create: () => request<ChatConversation>('/api/v2/chat/conversations', { method: 'POST', body: '{}' }),
   delete: (id: string) => request<void>(`/api/v2/chat/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  send: (id: string, message: string, scope: ChatScope, model: ChatModel) =>
+  send: (id: string, message: string, scope: ChatScope) =>
     request<ChatSendResult>(`/api/v2/agent/conversations/${encodeURIComponent(id)}/turns`, {
-      method: 'POST', body: JSON.stringify({ message, scope, requestedModel: model }),
+      method: 'POST', body: JSON.stringify({ message, scope, requestedModel: 'Gemma' }),
     }),
   confirm: (id: string, proposalId: string) =>
     request<void>(`/api/v2/agent/conversations/${encodeURIComponent(id)}/proposals/${encodeURIComponent(proposalId)}/confirm`, { method: 'POST', body: '{}' }),

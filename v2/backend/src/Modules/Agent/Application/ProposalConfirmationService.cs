@@ -36,6 +36,9 @@ public sealed class ProposalConfirmationService(
                 proposal.ConfirmationId == confirmationId ? null : "Proposal was already confirmed with a different confirmation ID.", []);
         if (proposal.State != ChatProposalState.Pending)
             return new(false, false, false, false, "Proposal is no longer pending.", []);
+        if (proposal.Actions.Count != 1 || proposal.Actions.Any(action =>
+                !string.Equals(action.Operation, nameof(ChangeOperation.Create), StringComparison.OrdinalIgnoreCase) || action.EntityType is not ("knowledge.document" or "tasks.task")))
+            return new(false, false, false, false, "Only creating one new knowledge document or task is allowed.", []);
         if (DateTimeOffset.UtcNow - proposal.CreatedAtUtc >= ProposalLifetime)
         {
             await chats.TryChangeProposalStateAsync(proposal.Id, ChatProposalState.Pending, ChatProposalState.Dismissed, null, cancellationToken);
