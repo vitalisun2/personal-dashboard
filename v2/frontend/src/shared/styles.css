@@ -54,6 +54,10 @@ button { border: 0; background: transparent; cursor: pointer; }
 .phone-shell{height:873px;background:linear-gradient(145deg,#0b1218,#101922 62%,#0c141b);border:1px solid #26313d;border-radius:28px;color:var(--text);overflow:clip;display:flex;flex-direction:column;position:relative;box-shadow:0 30px 80px rgba(0,0,0,.35)}
 .phone-shell .app-body{padding:18px 16px 0;flex:1;min-height:0;display:flex;flex-direction:column}
 .phone-shell .scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-bottom:16px;scrollbar-width:none;-ms-overflow-style:none}
+.pull-refresh-indicator{position:absolute;top:14px;left:50%;z-index:50;transform:translateX(-50%);pointer-events:none;white-space:nowrap;padding:8px 12px;border:1px solid #40566b;border-radius:999px;background:#22313e;color:#f3f6fa;box-shadow:0 8px 20px rgba(0,0,0,.35);font-size:12px;font-weight:650}
+.phone-shell .app-body{transition:transform 180ms ease-out}
+.phone-shell .app-body.is-pulling{transition:none}
+@media (prefers-reduced-motion: reduce){.phone-shell .app-body{transition:none}}
 .phone-shell .scroll::-webkit-scrollbar{display:none;width:0;height:0}
 .phone-shell .knowledge-section{display:flex;min-height:0;flex:1;flex-direction:column}
 .phone-shell .header-copy{min-width:0;flex:1}

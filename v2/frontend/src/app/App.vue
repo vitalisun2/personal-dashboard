@@ -18,6 +18,45 @@ const syncStatus = ref<SyncStatus>('ready')
 let unsubscribeSyncStatus: (() => void) | undefined
 const appFrame = ref<HTMLElement | null>(null)
 let viewport: VisualViewport | null = null
+const pullDistance = ref(0)
+const pullReady = computed(() => pullDistance.value >= 64)
+let pullStart: { x: number; y: number; scroll: HTMLElement | null } | null = null
+
+function resetPull() {
+  pullStart = null
+  pullDistance.value = 0
+}
+
+function onTouchStart(event: TouchEvent) {
+  resetPull()
+  if (event.touches.length !== 1 || !window.matchMedia('(pointer: coarse)').matches) return
+  const target = event.target
+  if (!(target instanceof Element) || !target.closest('.app-body')) return
+  if (target.closest('input, textarea, select, [contenteditable], .handle, .bottom-window, .sheet, .overlay, .row-context-menu, .chat-history-overlay')) return
+  const shell = target.closest('.phone-shell')!
+  if (shell.querySelector('.overlay.open, .sheet.open, [aria-modal="true"], .chat-history-overlay.open')) return
+  const scroll = target.closest<HTMLElement>('.scroll, .chat-scroll')
+    ?? shell.querySelector<HTMLElement>('.page-content .scroll, .page-content .chat-scroll')
+  if (scroll && scroll.scrollTop > 0) return
+  pullStart = { x: event.touches[0].clientX, y: event.touches[0].clientY, scroll }
+}
+
+function onTouchMove(event: TouchEvent) {
+  if (!pullStart || event.touches.length !== 1) return
+  if (pullStart.scroll && pullStart.scroll.scrollTop > 0) { resetPull(); return }
+  const dx = event.touches[0].clientX - pullStart.x
+  const dy = event.touches[0].clientY - pullStart.y
+  if (dy < -8 || (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy))) { resetPull(); return }
+  if (dy <= 0) return
+  pullDistance.value = Math.min(96, dy * 0.65)
+  if (pullDistance.value > 0) event.preventDefault()
+}
+
+function onTouchEnd() {
+  const shouldReload = pullReady.value
+  resetPull()
+  if (shouldReload) window.location.reload()
+}
 
 function syncVisibleViewport() {
   const frame = appFrame.value
@@ -45,9 +84,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main ref="appFrame" class="app-frame">
+  <main ref="appFrame" class="app-frame" @touchstart.passive="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd" @touchcancel="resetPull">
     <div class="phone-shell">
-      <div class="app-body">
+      <div v-if="pullDistance > 32" class="pull-refresh-indicator" role="status">
+        {{ pullReady ? 'Отпустите для обновления' : 'Потяните для обновления' }}
+      </div>
+      <div class="app-body" :class="{ 'is-pulling': pullDistance > 0 }" :style="{ transform: `translateY(${pullDistance}px)` }">
         <header class="topline">
           <div class="header-copy">
             <div class="eyebrow">Personal OS</div>
