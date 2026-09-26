@@ -16,12 +16,36 @@ const title = computed(() => titles[currentSection.value] || 'База знан�
 const hideBottomNav = computed(() => currentSection.value === 'chat')
 const syncStatus = ref<SyncStatus>('ready')
 let unsubscribeSyncStatus: (() => void) | undefined
-onMounted(() => { unsubscribeSyncStatus = subscribeSyncStatus(next => { syncStatus.value = next }) })
-onUnmounted(() => unsubscribeSyncStatus?.())
+const appFrame = ref<HTMLElement | null>(null)
+let viewport: VisualViewport | null = null
+
+function syncVisibleViewport() {
+  const frame = appFrame.value
+  if (!frame) return
+  frame.style.setProperty('--visible-viewport-height', `${Math.max(0, viewport?.height ?? window.innerHeight)}px`)
+  frame.style.setProperty('--visible-viewport-offset-top', `${Math.max(0, viewport?.offsetTop ?? 0)}px`)
+}
+
+onMounted(() => {
+  unsubscribeSyncStatus = subscribeSyncStatus(next => { syncStatus.value = next })
+  document.documentElement.classList.add('keyboard-viewport-lock')
+  viewport = window.visualViewport ?? null
+  syncVisibleViewport()
+  viewport?.addEventListener('resize', syncVisibleViewport)
+  viewport?.addEventListener('scroll', syncVisibleViewport)
+  window.addEventListener('resize', syncVisibleViewport)
+})
+onUnmounted(() => {
+  unsubscribeSyncStatus?.()
+  viewport?.removeEventListener('resize', syncVisibleViewport)
+  viewport?.removeEventListener('scroll', syncVisibleViewport)
+  window.removeEventListener('resize', syncVisibleViewport)
+  document.documentElement.classList.remove('keyboard-viewport-lock')
+})
 </script>
 
 <template>
-  <main class="app-frame">
+  <main ref="appFrame" class="app-frame">
     <div class="phone-shell">
       <div class="app-body">
         <header class="topline">
