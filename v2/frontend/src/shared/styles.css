@@ -503,7 +503,7 @@ button { border: 0; background: transparent; cursor: pointer; }
 /* Shell sizing (mockup: #kb-fixed-drop{width:100%;max-width:393px;margin:24px auto}) */
 .app-frame { padding: 24px 0; }
 .phone-shell { width: min(100%, 393px); max-height: calc(100dvh - 48px); min-height: 560px; margin: 0 auto; }
-@media (max-width: 420px) {
+@media (max-width: 420px), (pointer: coarse) and (max-width: 600px), (pointer: coarse) and (max-height: 600px) {
   html.keyboard-viewport-lock, html.keyboard-viewport-lock body { overflow: hidden; overscroll-behavior: none; }
   .app-frame { position: fixed; top: var(--visible-viewport-offset-top, 0px); left: 0; width: 100%; height: var(--visible-viewport-height, 100dvh); min-height: 0; padding: 0; overflow: hidden; }
   .phone-shell { height: 100%; max-height: none; min-height: 0; }
